@@ -12,6 +12,8 @@ public class FighterStats : MonoBehaviour
 
     [SerializeField] private bool isStaminaCritical;
 
+    public bool IsStaminaCritical => isStaminaCritical;
+
     private void Awake()
     {
         currentHealth = maxHealth;

@@ -24,11 +24,21 @@ public class FighterCombat : MonoBehaviour
     [SerializeField] private float defenseDuration = 0.8f;
     [SerializeField] private float defenseStaminaCost = 10f;
 
+    [Header("Garde maintenue")]
+    [SerializeField] private float heldGuardStaminaCostPerSecond = 15f;
+
+    [Header("Esquive")]
+    [SerializeField] private float dodgeStaminaCost = 20f;
+    [SerializeField] private float dodgeDistance = 1.25f;
+    [SerializeField] private float dodgeDuration = 0.18f;
+
     private bool isActing;
     private bool isDefending;
+    private bool isHoldingGuard;
     private float chargeHoldTime;
 
     public bool IsDefending => isDefending;
+    public bool IsPlayerControlled => controlledByPlayer;
 
     private void Awake()
     {
@@ -41,6 +51,8 @@ public class FighterCombat : MonoBehaviour
 
     private void Update()
     {
+        UpdateHeldGuard();
+
         if (!controlledByPlayer || Keyboard.current == null)
             return;
 
@@ -130,6 +142,40 @@ public class FighterCombat : MonoBehaviour
         StartCoroutine(DefenseRoutine());
     }
 
+    public bool StartHeldGuard()
+    {
+        if (isActing || isHoldingGuard)
+            return false;
+
+        if (!fighterStats.SpendStamina(
+                heldGuardStaminaCostPerSecond * Time.deltaTime))
+            return false;
+
+        StopCharge();
+        isHoldingGuard = true;
+        isDefending = true;
+        return true;
+    }
+
+    public void StopHeldGuard()
+    {
+        if (!isHoldingGuard)
+            return;
+
+        isHoldingGuard = false;
+        isDefending = false;
+    }
+
+    public void DodgeLeft()
+    {
+        StartDodge(-1f);
+    }
+
+    public void DodgeRight()
+    {
+        StartDodge(1f);
+    }
+
     private IEnumerator DefenseRoutine()
     {
         isActing = true;
@@ -139,6 +185,63 @@ public class FighterCombat : MonoBehaviour
 
         isDefending = false;
         isActing = false;
+    }
+
+    private void UpdateHeldGuard()
+    {
+        if (!isHoldingGuard)
+            return;
+
+        float cost = heldGuardStaminaCostPerSecond * Time.deltaTime;
+        if (!fighterStats.SpendStamina(cost))
+            StopHeldGuard();
+    }
+
+    private void StartDodge(float direction)
+    {
+        if (isActing || isHoldingGuard)
+            return;
+
+        if (!fighterStats.SpendStamina(dodgeStaminaCost))
+            return;
+
+        StopCharge();
+        StartCoroutine(DodgeRoutine(direction));
+    }
+
+    private IEnumerator DodgeRoutine(float direction)
+    {
+        isActing = true;
+
+        Vector3 startPosition = transform.position;
+        Vector3 sideDirection = transform.right * direction;
+        Vector3 dodgePosition = startPosition + sideDirection * dodgeDistance;
+
+        float halfDuration = dodgeDuration * 0.5f;
+        yield return MoveBetween(startPosition, dodgePosition, halfDuration);
+        yield return MoveBetween(dodgePosition, startPosition, halfDuration);
+
+        transform.position = startPosition;
+        isActing = false;
+    }
+
+    private IEnumerator MoveBetween(
+        Vector3 from,
+        Vector3 to,
+        float duration)
+    {
+        float elapsed = 0f;
+
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            transform.position = Vector3.Lerp(
+                from,
+                to,
+                Mathf.Clamp01(elapsed / duration)
+            );
+            yield return null;
+        }
     }
 
     private void HandleCharge()
