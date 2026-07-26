@@ -396,6 +396,7 @@ GameObject:
   - component: {fileID: 810199912}
   - component: {fileID: 810199911}
   - component: {fileID: 810199910}
+  - component: {fileID: 810199915}
   m_Layer: 0
   m_Name: Enemy
   m_TagString: Untagged
@@ -419,6 +420,7 @@ MonoBehaviour:
   currentHealth: 0
   maxStamina: 100
   currentStamina: 0
+  isStaminaCritical: 0
 --- !u!136 &810199911
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -514,6 +516,28 @@ Transform:
   m_Children: []
   m_Father: {fileID: 0}
   m_LocalEulerAnglesHint: {x: 0, y: 180, z: 0}
+--- !u!114 &810199915
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 810199909}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: f80b8615ce160164bb8390ecbdeda48f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::FighterCombat
+  controlledByPlayer: 0
+  fighterStats: {fileID: 810199910}
+  targetStats: {fileID: 1814160285}
+  targetCombat: {fileID: 1814160290}
+  lightAttackDamage: 20
+  lightAttackStaminaCost: 10
+  chargeStartupDelay: 0.3
+  chargeRecoveryPerSecond: 25
+  defenseDuration: 0.8
+  defenseStaminaCost: 10
 --- !u!1 &832575517
 GameObject:
   m_ObjectHideFlags: 0
@@ -713,6 +737,7 @@ MonoBehaviour:
   currentHealth: 0
   maxStamina: 100
   currentStamina: 0
+  isStaminaCritical: 0
 --- !u!136 &1814160286
 CapsuleCollider:
   m_ObjectHideFlags: 0
@@ -820,10 +845,16 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f80b8615ce160164bb8390ecbdeda48f, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::FighterCombat
+  controlledByPlayer: 1
   fighterStats: {fileID: 1814160285}
   targetStats: {fileID: 810199910}
+  targetCombat: {fileID: 810199915}
   lightAttackDamage: 20
   lightAttackStaminaCost: 10
+  chargeStartupDelay: 0.3
+  chargeRecoveryPerSecond: 25
+  defenseDuration: 0.8
+  defenseStaminaCost: 10
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
