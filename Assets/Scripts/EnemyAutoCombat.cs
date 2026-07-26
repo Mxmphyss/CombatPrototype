@@ -4,9 +4,18 @@ using UnityEngine;
 public sealed class EnemyAutoCombat : MonoBehaviour
 {
     [Header("Rythme")]
+    [Min(0f)]
     [SerializeField] private float minimumDelay = 1.5f;
+    [Min(0f)]
     [SerializeField] private float maximumDelay = 2.5f;
+    [Min(0f)]
     [SerializeField] private float telegraphDuration = 0.6f;
+
+    [Header("Anticipation visuelle")]
+    [Range(0f, 0.15f)]
+    [SerializeField] private float pulseStrength = 0.035f;
+    [Min(1f)]
+    [SerializeField] private float pulseSpeed = 18f;
 
     private FighterCombat enemy;
     private FighterCombat player;
@@ -21,7 +30,6 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         CombatHUD combatHud)
     {
         StopAI();
-        Unsubscribe();
 
         enemy = enemyCombat;
         player = playerCombat;
@@ -29,14 +37,12 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         normalScale = transform.localScale;
         initialized = true;
 
-        Subscribe();
         StartAI();
     }
 
     private void OnDisable()
     {
         StopAI();
-        Unsubscribe();
     }
 
     public void StartAI()
@@ -62,12 +68,13 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         if (enemy != null)
             enemy.StopChargeInput();
 
-        transform.localScale = normalScale == Vector3.zero
-            ? transform.localScale
-            : normalScale;
+        RestoreScale();
+    }
 
-        if (hud != null && !hud.BattleEnded)
-            hud.SetEnemyStatus(string.Empty);
+    public void RestartAI()
+    {
+        StopAI();
+        StartAI();
     }
 
     private IEnumerator CombatLoop()
@@ -98,26 +105,20 @@ public sealed class EnemyAutoCombat : MonoBehaviour
             if (!CanContinue())
                 break;
 
-            while (enemy.IsBusy && CanContinue())
-                yield return null;
+            CombatActionResult result =
+                enemy.LightAttack(telegraphDuration);
 
-            if (!CanContinue())
-                break;
-
-            hud.SetEnemyStatus("Attaque");
-            hud.ShowMessage(
-                "Attaque ennemie",
-                new Color(0.94f, 0.42f, 0.30f),
-                telegraphDuration
-            );
-            yield return TelegraphAttack();
-
-            if (!CanContinue())
-                break;
-
-            CombatActionResult result = enemy.LightAttack();
             if (result == CombatActionResult.Started)
             {
+                hud.SetEnemyStatus("Attaque");
+                hud.ShowMessage(
+                    "Attaque ennemie",
+                    new Color(0.94f, 0.42f, 0.30f),
+                    telegraphDuration
+                );
+
+                yield return PulseDuringStartup();
+
                 while (enemy.IsBusy && CanContinue())
                     yield return null;
             }
@@ -128,12 +129,30 @@ public sealed class EnemyAutoCombat : MonoBehaviour
                 yield return RechargeUntilAttackIsAvailable();
             }
 
+            RestoreScale();
             if (CanContinue())
                 hud.SetEnemyStatus(string.Empty);
         }
 
-        transform.localScale = normalScale;
+        RestoreScale();
         combatRoutine = null;
+    }
+
+    private IEnumerator PulseDuringStartup()
+    {
+        while (CanContinue() &&
+               enemy.CurrentState ==
+               FighterCombatState.AttackStartup)
+        {
+            float pulse =
+                1f +
+                Mathf.Sin(Time.time * pulseSpeed) *
+                pulseStrength;
+            transform.localScale = normalScale * pulse;
+            yield return null;
+        }
+
+        RestoreScale();
     }
 
     private IEnumerator RechargeUntilAttackIsAvailable()
@@ -146,8 +165,7 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         {
             if (!enemy.IsCharging)
             {
-                CombatActionResult result =
-                    enemy.StartCharge();
+                CombatActionResult result = enemy.StartCharge();
                 if (result != CombatActionResult.Started)
                 {
                     yield return null;
@@ -165,23 +183,6 @@ public sealed class EnemyAutoCombat : MonoBehaviour
             hud.SetEnemyStatus(string.Empty);
             yield return new WaitForSeconds(0.15f);
         }
-    }
-
-    private IEnumerator TelegraphAttack()
-    {
-        float elapsed = 0f;
-        float duration = Mathf.Max(0.1f, telegraphDuration);
-
-        while (elapsed < duration && CanContinue())
-        {
-            elapsed += Time.deltaTime;
-            float pulse =
-                1f + Mathf.Sin(elapsed * 18f) * 0.025f;
-            transform.localScale = normalScale * pulse;
-            yield return null;
-        }
-
-        transform.localScale = normalScale;
     }
 
     private IEnumerator WaitWhileCombatContinues(float duration)
@@ -206,26 +207,9 @@ public sealed class EnemyAutoCombat : MonoBehaviour
                !player.IsDead;
     }
 
-    private void Subscribe()
+    private void RestoreScale()
     {
-        if (enemy?.Stats != null)
-            enemy.Stats.OnDeath += HandleDeath;
-
-        if (player?.Stats != null)
-            player.Stats.OnDeath += HandleDeath;
-    }
-
-    private void Unsubscribe()
-    {
-        if (enemy?.Stats != null)
-            enemy.Stats.OnDeath -= HandleDeath;
-
-        if (player?.Stats != null)
-            player.Stats.OnDeath -= HandleDeath;
-    }
-
-    private void HandleDeath(FighterStats deadStats)
-    {
-        StopAI();
+        if (normalScale != Vector3.zero)
+            transform.localScale = normalScale;
     }
 }

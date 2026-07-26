@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -24,8 +25,8 @@ public sealed class CombatHUD : MonoBehaviour
     private FighterCombat enemyCombat;
     private FighterStats playerStats;
     private FighterStats enemyStats;
-    private EnemyAutoCombat enemyAI;
     private CombatGestureGrid gestureGrid;
+    private Action retryRequested;
 
     private StatBar playerHealthBar;
     private StatBar playerStaminaBar;
@@ -34,37 +35,16 @@ public sealed class CombatHUD : MonoBehaviour
     private Text enemyStatusText;
     private Text feedbackText;
     private CanvasGroup feedbackGroup;
+    private Button retryButton;
     private Coroutine feedbackRoutine;
-    private bool battleEnded;
 
-    public bool BattleEnded => battleEnded;
+    public bool BattleEnded { get; private set; }
 
-    [RuntimeInitializeOnLoadMethod(
-        RuntimeInitializeLoadType.AfterSceneLoad)]
-    private static void CreateForCombatScene()
+    public static CombatHUD Create(
+        FighterCombat player,
+        FighterCombat enemy,
+        Action onRetry)
     {
-        if (FindFirstObjectByType<CombatHUD>() != null)
-            return;
-
-        FighterCombat[] fighters =
-            FindObjectsByType<FighterCombat>(
-                FindObjectsSortMode.None
-            );
-
-        FighterCombat player = null;
-        FighterCombat enemy = null;
-
-        foreach (FighterCombat fighter in fighters)
-        {
-            if (fighter.IsPlayerControlled)
-                player = fighter;
-            else if (enemy == null)
-                enemy = fighter;
-        }
-
-        if (player == null || enemy == null)
-            return;
-
         EnsureEventSystem();
 
         GameObject canvasObject = new("Combat UI Canvas");
@@ -76,8 +56,7 @@ public sealed class CombatHUD : MonoBehaviour
             canvasObject.AddComponent<CanvasScaler>();
         scaler.uiScaleMode =
             CanvasScaler.ScaleMode.ScaleWithScreenSize;
-        scaler.referenceResolution =
-            new Vector2(1080f, 1920f);
+        scaler.referenceResolution = new Vector2(1080f, 1920f);
         scaler.screenMatchMode =
             CanvasScaler.ScreenMatchMode.MatchWidthOrHeight;
         scaler.matchWidthOrHeight = 0.5f;
@@ -85,7 +64,8 @@ public sealed class CombatHUD : MonoBehaviour
         canvasObject.AddComponent<GraphicRaycaster>();
 
         CombatHUD hud = canvasObject.AddComponent<CombatHUD>();
-        hud.Initialize(player, enemy);
+        hud.Initialize(player, enemy, onRetry);
+        return hud;
     }
 
     private static void EnsureEventSystem()
@@ -101,12 +81,14 @@ public sealed class CombatHUD : MonoBehaviour
 
     private void Initialize(
         FighterCombat player,
-        FighterCombat enemy)
+        FighterCombat enemy,
+        Action onRetry)
     {
         playerCombat = player;
         enemyCombat = enemy;
         playerStats = player.Stats;
         enemyStats = enemy.Stats;
+        retryRequested = onRetry;
 
         if (playerStats == null || enemyStats == null)
         {
@@ -121,6 +103,7 @@ public sealed class CombatHUD : MonoBehaviour
         BuildEnemyPanel(safeRoot);
         BuildPlayerPanel(safeRoot);
         BuildFeedback(safeRoot);
+        BuildRetryButton(safeRoot);
 
         gestureGrid = CombatGestureGrid.Create(
             safeRoot,
@@ -129,13 +112,14 @@ public sealed class CombatHUD : MonoBehaviour
         );
 
         Subscribe();
+        HideEndState();
         RefreshAll();
-        AttachEnemyAI();
     }
 
     private void OnDestroy()
     {
         Unsubscribe();
+        retryRequested = null;
 
         if (feedbackRoutine != null)
             StopCoroutine(feedbackRoutine);
@@ -148,7 +132,7 @@ public sealed class CombatHUD : MonoBehaviour
         bool persistent = false)
     {
         if (feedbackText == null ||
-            (battleEnded && !persistent))
+            (BattleEnded && !persistent))
         {
             return;
         }
@@ -175,6 +159,72 @@ public sealed class CombatHUD : MonoBehaviour
     {
         if (enemyStatusText != null)
             enemyStatusText.text = status;
+    }
+
+    public void SetGridEnabled(bool enabled)
+    {
+        gestureGrid?.SetInputEnabled(enabled);
+    }
+
+    public void ShowEndState(bool playerWon)
+    {
+        BattleEnded = true;
+        SetGridEnabled(false);
+        SetEnemyStatus(playerWon ? "Vaincu" : string.Empty);
+        ShowMessage(
+            playerWon ? "Victoire" : "Defaite",
+            playerWon
+                ? new Color(0.93f, 0.77f, 0.3f)
+                : new Color(0.9f, 0.27f, 0.25f),
+            0f,
+            true
+        );
+
+        if (retryButton != null)
+            retryButton.gameObject.SetActive(true);
+    }
+
+    public void HideEndState()
+    {
+        BattleEnded = false;
+
+        if (feedbackRoutine != null)
+        {
+            StopCoroutine(feedbackRoutine);
+            feedbackRoutine = null;
+        }
+
+        if (feedbackGroup != null)
+            feedbackGroup.alpha = 0f;
+        if (feedbackText != null)
+            feedbackText.text = string.Empty;
+        if (retryButton != null)
+            retryButton.gameObject.SetActive(false);
+
+        SetEnemyStatus(string.Empty);
+    }
+
+    public void RefreshAll()
+    {
+        if (playerStats == null || enemyStats == null)
+            return;
+
+        UpdatePlayerHealth(
+            playerStats.CurrentHealth,
+            playerStats.MaxHealth
+        );
+        UpdatePlayerStamina(
+            playerStats.CurrentStamina,
+            playerStats.MaxStamina
+        );
+        UpdateEnemyHealth(
+            enemyStats.CurrentHealth,
+            enemyStats.MaxHealth
+        );
+        UpdateEnemyStamina(
+            enemyStats.CurrentStamina,
+            enemyStats.MaxStamina
+        );
     }
 
     private RectTransform CreateSafeAreaRoot()
@@ -291,8 +341,8 @@ public sealed class CombatHUD : MonoBehaviour
 
         RectTransform rect =
             feedbackObject.AddComponent<RectTransform>();
-        rect.anchorMin = new Vector2(0.5f, 0.5f);
-        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.anchorMin = rect.anchorMax =
+            new Vector2(0.5f, 0.5f);
         rect.pivot = new Vector2(0.5f, 0.5f);
         rect.anchoredPosition = new Vector2(0f, 135f);
         rect.sizeDelta = new Vector2(900f, 100f);
@@ -310,26 +360,70 @@ public sealed class CombatHUD : MonoBehaviour
         feedbackText.fontSize = 38;
         feedbackText.color = TextColor;
         feedbackText.raycastTarget = false;
-        feedbackText.horizontalOverflow =
-            HorizontalWrapMode.Wrap;
-        feedbackText.verticalOverflow =
-            VerticalWrapMode.Overflow;
 
         Outline outline = feedbackObject.AddComponent<Outline>();
-        outline.effectColor =
-            new Color(0f, 0f, 0f, 0.72f);
+        outline.effectColor = new Color(0f, 0f, 0f, 0.72f);
         outline.effectDistance = new Vector2(2f, -2f);
+    }
+
+    private void BuildRetryButton(Transform parent)
+    {
+        GameObject buttonObject = new("Retry Button");
+        buttonObject.transform.SetParent(parent, false);
+
+        RectTransform rect =
+            buttonObject.AddComponent<RectTransform>();
+        rect.anchorMin = rect.anchorMax =
+            new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = new Vector2(0f, -15f);
+        rect.sizeDelta = new Vector2(360f, 104f);
+
+        Image image = buttonObject.AddComponent<Image>();
+        image.sprite = null;
+        image.color = new Color(0.13f, 0.19f, 0.27f, 0.96f);
+
+        Outline outline = buttonObject.AddComponent<Outline>();
+        outline.effectColor = new Color(0.7f, 0.78f, 0.9f, 0.45f);
+        outline.effectDistance = new Vector2(2f, -2f);
+
+        retryButton = buttonObject.AddComponent<Button>();
+        ColorBlock colors = retryButton.colors;
+        colors.normalColor = Color.white;
+        colors.highlightedColor =
+            new Color(0.92f, 0.95f, 1f, 1f);
+        colors.pressedColor =
+            new Color(0.72f, 0.82f, 0.94f, 1f);
+        colors.selectedColor = colors.highlightedColor;
+        retryButton.colors = colors;
+        retryButton.onClick.AddListener(HandleRetryClicked);
+
+        Text label = CreateText(
+            buttonObject.transform,
+            "Label",
+            "Rejouer",
+            34,
+            FontStyle.Bold,
+            TextAnchor.MiddleCenter,
+            Vector2.zero,
+            rect.sizeDelta
+        );
+        label.color = TextColor;
+    }
+
+    private void HandleRetryClicked()
+    {
+        retryButton.interactable = false;
+        retryRequested?.Invoke();
+        retryButton.interactable = true;
     }
 
     private void Subscribe()
     {
         playerStats.OnHealthChanged += UpdatePlayerHealth;
         playerStats.OnStaminaChanged += UpdatePlayerStamina;
-        playerStats.OnDeath += HandleFighterDeath;
-
         enemyStats.OnHealthChanged += UpdateEnemyHealth;
         enemyStats.OnStaminaChanged += UpdateEnemyStamina;
-        enemyStats.OnDeath += HandleFighterDeath;
 
         playerCombat.OnAttackResolved += HandleAttackResolved;
         enemyCombat.OnAttackResolved += HandleAttackResolved;
@@ -341,61 +435,23 @@ public sealed class CombatHUD : MonoBehaviour
         if (playerStats != null)
         {
             playerStats.OnHealthChanged -= UpdatePlayerHealth;
-            playerStats.OnStaminaChanged -=
-                UpdatePlayerStamina;
-            playerStats.OnDeath -= HandleFighterDeath;
+            playerStats.OnStaminaChanged -= UpdatePlayerStamina;
         }
 
         if (enemyStats != null)
         {
             enemyStats.OnHealthChanged -= UpdateEnemyHealth;
-            enemyStats.OnStaminaChanged -=
-                UpdateEnemyStamina;
-            enemyStats.OnDeath -= HandleFighterDeath;
+            enemyStats.OnStaminaChanged -= UpdateEnemyStamina;
         }
 
         if (playerCombat != null)
-            playerCombat.OnAttackResolved -=
-                HandleAttackResolved;
+            playerCombat.OnAttackResolved -= HandleAttackResolved;
 
         if (enemyCombat != null)
         {
-            enemyCombat.OnAttackResolved -=
-                HandleAttackResolved;
-            enemyCombat.OnStateChanged -=
-                HandleEnemyStateChanged;
+            enemyCombat.OnAttackResolved -= HandleAttackResolved;
+            enemyCombat.OnStateChanged -= HandleEnemyStateChanged;
         }
-    }
-
-    private void RefreshAll()
-    {
-        UpdatePlayerHealth(
-            playerStats.CurrentHealth,
-            playerStats.MaxHealth
-        );
-        UpdatePlayerStamina(
-            playerStats.CurrentStamina,
-            playerStats.MaxStamina
-        );
-        UpdateEnemyHealth(
-            enemyStats.CurrentHealth,
-            enemyStats.MaxHealth
-        );
-        UpdateEnemyStamina(
-            enemyStats.CurrentStamina,
-            enemyStats.MaxStamina
-        );
-    }
-
-    private void AttachEnemyAI()
-    {
-        enemyAI = enemyCombat.GetComponent<EnemyAutoCombat>();
-        if (enemyAI == null)
-            enemyAI =
-                enemyCombat.gameObject.AddComponent<
-                    EnemyAutoCombat>();
-
-        enemyAI.Initialize(enemyCombat, playerCombat, this);
     }
 
     private void UpdatePlayerHealth(float current, float maximum)
@@ -403,9 +459,7 @@ public sealed class CombatHUD : MonoBehaviour
         playerHealthBar?.SetValue(current, maximum);
     }
 
-    private void UpdatePlayerStamina(
-        float current,
-        float maximum)
+    private void UpdatePlayerStamina(float current, float maximum)
     {
         playerStaminaBar?.SetValue(current, maximum);
     }
@@ -415,9 +469,7 @@ public sealed class CombatHUD : MonoBehaviour
         enemyHealthBar?.SetValue(current, maximum);
     }
 
-    private void UpdateEnemyStamina(
-        float current,
-        float maximum)
+    private void UpdateEnemyStamina(float current, float maximum)
     {
         enemyStaminaBar?.SetValue(current, maximum);
     }
@@ -426,17 +478,18 @@ public sealed class CombatHUD : MonoBehaviour
         FighterCombat fighter,
         FighterCombatState state)
     {
-        if (battleEnded)
+        if (BattleEnded)
             return;
 
         string label = state switch
         {
-            FighterCombatState.Attacking => "Attaque",
+            FighterCombatState.AttackStartup => "Attaque",
+            FighterCombatState.Attacking => "Impact",
+            FighterCombatState.Recovering => "Recuperation",
             FighterCombatState.Defending => "Garde",
-            FighterCombatState.HoldingGuard =>
-                "Garde maintenue",
             FighterCombatState.Charging => "Recharge",
             FighterCombatState.Dodging => "Esquive",
+            FighterCombatState.Stunned => "Interrompu",
             FighterCombatState.Dead => "Vaincu",
             _ => string.Empty
         };
@@ -444,53 +497,45 @@ public sealed class CombatHUD : MonoBehaviour
         SetEnemyStatus(label);
     }
 
-    private void HandleAttackResolved(
-        FighterCombat target,
-        CombatHitResult result)
+    private void HandleAttackResolved(CombatImpact impact)
     {
-        if (battleEnded || target != playerCombat)
+        if (BattleEnded || impact.Target != playerCombat)
             return;
 
-        if (result == CombatHitResult.Blocked)
+        switch (impact.Result)
         {
-            ShowMessage(
-                "Garde reussie",
-                new Color(0.35f, 0.72f, 0.94f),
-                1.1f
-            );
+            case CombatHitResult.Blocked:
+                ShowMessage(
+                    "Garde reussie",
+                    new Color(0.35f, 0.72f, 0.94f),
+                    1.1f
+                );
+                break;
+
+            case CombatHitResult.PerfectGuard:
+                ShowMessage(
+                    "Garde parfaite",
+                    new Color(0.45f, 0.9f, 1f),
+                    1.25f
+                );
+                break;
+
+            case CombatHitResult.Dodged:
+                ShowMessage(
+                    "Esquive reussie",
+                    new Color(0.92f, 0.78f, 0.3f),
+                    1.1f
+                );
+                break;
+
+            case CombatHitResult.PerfectDodge:
+                ShowMessage(
+                    "Esquive parfaite",
+                    new Color(1f, 0.86f, 0.36f),
+                    1.25f
+                );
+                break;
         }
-        else if (result == CombatHitResult.Dodged)
-        {
-            ShowMessage(
-                "Esquive reussie",
-                new Color(0.92f, 0.78f, 0.3f),
-                1.1f
-            );
-        }
-    }
-
-    private void HandleFighterDeath(FighterStats deadFighter)
-    {
-        if (battleEnded)
-            return;
-
-        battleEnded = true;
-        bool playerWon = deadFighter == enemyStats;
-
-        enemyAI?.StopAI();
-        gestureGrid?.SetInputEnabled(false);
-        playerCombat.SetCombatEnabled(false);
-        enemyCombat.SetCombatEnabled(false);
-
-        SetEnemyStatus(playerWon ? "Vaincu" : string.Empty);
-        ShowMessage(
-            playerWon ? "Victoire" : "Defaite",
-            playerWon
-                ? new Color(0.93f, 0.77f, 0.3f)
-                : new Color(0.9f, 0.27f, 0.25f),
-            0f,
-            true
-        );
     }
 
     private IEnumerator FadeMessageRoutine(float duration)
@@ -541,16 +586,8 @@ public sealed class CombatHUD : MonoBehaviour
         rect.sizeDelta = size;
 
         Image image = panelObject.AddComponent<Image>();
+        image.sprite = null;
         image.color = PanelColor;
-        Sprite background =
-            Resources.GetBuiltinResource<Sprite>(
-                "UI/Skin/Background.psd"
-            );
-        if (background != null)
-        {
-            image.sprite = background;
-            image.type = Image.Type.Sliced;
-        }
         image.raycastTarget = false;
 
         Outline outline = panelObject.AddComponent<Outline>();
@@ -581,6 +618,7 @@ public sealed class CombatHUD : MonoBehaviour
         rect.sizeDelta = size;
 
         Image background = barObject.AddComponent<Image>();
+        background.sprite = null;
         background.color =
             new Color(0.01f, 0.015f, 0.025f, 0.88f);
         background.raycastTarget = false;
@@ -619,12 +657,7 @@ public sealed class CombatHUD : MonoBehaviour
         );
         value.color = TextColor;
 
-        return new StatBar(
-            fill,
-            value,
-            normalColor,
-            lowColor
-        );
+        return new StatBar(fill, value, normalColor, lowColor);
     }
 
     private static Text CreateText(
@@ -692,9 +725,7 @@ public sealed class CombatHUD : MonoBehaviour
 
             fill.fillAmount = normalized;
             fill.color =
-                normalized <= 0.25f
-                    ? lowColor
-                    : normalColor;
+                normalized <= 0.25f ? lowColor : normalColor;
             value.text =
                 $"{Mathf.CeilToInt(current)} / " +
                 $"{Mathf.CeilToInt(maximum)}";

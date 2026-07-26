@@ -30,12 +30,7 @@ public class FighterStats : MonoBehaviour
 
     private void Awake()
     {
-        maxHealth = Mathf.Max(1f, maxHealth);
-        maxStamina = Mathf.Max(1f, maxStamina);
-        currentHealth = maxHealth;
-        currentStamina = maxStamina;
-        isStaminaCritical = false;
-        deathRaised = false;
+        ResetStats();
     }
 
     private void Start()
@@ -62,7 +57,11 @@ public class FighterStats : MonoBehaviour
             return;
 
         float previousHealth = currentHealth;
-        currentHealth = Mathf.Clamp(currentHealth - damage, 0f, maxHealth);
+        currentHealth = Mathf.Clamp(
+            currentHealth - damage,
+            0f,
+            maxHealth
+        );
 
         if (!Mathf.Approximately(previousHealth, currentHealth))
             OnHealthChanged?.Invoke(currentHealth, maxHealth);
@@ -92,7 +91,7 @@ public class FighterStats : MonoBehaviour
         return true;
     }
 
-    public void RecoverStaminaFromCharge(float amount)
+    public void RecoverStamina(float amount)
     {
         if (amount <= 0f || IsDead || currentStamina >= maxStamina)
             return;
@@ -107,6 +106,22 @@ public class FighterStats : MonoBehaviour
 
         if (!Mathf.Approximately(previousStamina, currentStamina))
             OnStaminaChanged?.Invoke(currentStamina, maxStamina);
+    }
+
+    public void RecoverStaminaFromCharge(float amount)
+    {
+        RecoverStamina(amount);
+    }
+
+    public void ResetStats()
+    {
+        maxHealth = Mathf.Max(1f, maxHealth);
+        maxStamina = Mathf.Max(1f, maxStamina);
+        currentHealth = maxHealth;
+        currentStamina = maxStamina;
+        isStaminaCritical = false;
+        deathRaised = false;
+        NotifyAllValues();
     }
 
     public void NotifyAllValues()
