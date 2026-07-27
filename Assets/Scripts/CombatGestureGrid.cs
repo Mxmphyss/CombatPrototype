@@ -21,6 +21,12 @@ public sealed class CombatGestureGrid :
     private static readonly Color MovementColor =
         new(0.78f, 0.66f, 0.25f, 1f);
 
+    [Header("Detection tactile")]
+    [Tooltip("Rayon de detection local autour de chaque point.")]
+    [SerializeField]
+    [Min(1f)]
+    private float pointDetectionRadius = 24f;
+
     private readonly List<int> gesture = new();
     private readonly List<Image> points = new();
     private readonly List<Image> segments = new();
@@ -325,18 +331,27 @@ public sealed class CombatGestureGrid :
         Vector2 screenPosition,
         Camera eventCamera)
     {
+        RectTransform gridRect = (RectTransform)transform;
+
+        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
+                gridRect,
+                screenPosition,
+                eventCamera,
+                out Vector2 localPosition))
+        {
+            return -1;
+        }
+
         int closest = -1;
-        float closestDistance = 120f;
+        float closestDistance = pointDetectionRadius;
 
         for (int index = 0; index < points.Count; index++)
         {
-            Vector2 pointPosition =
-                RectTransformUtility.WorldToScreenPoint(
-                    eventCamera,
-                    points[index].rectTransform.position
-                );
+            Vector2 pointPosition = gridRect.InverseTransformPoint(
+                points[index].rectTransform.position
+            );
             float distance = Vector2.Distance(
-                screenPosition,
+                localPosition,
                 pointPosition
             );
             if (distance >= closestDistance)
