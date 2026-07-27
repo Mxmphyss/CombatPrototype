@@ -21,9 +21,26 @@ public sealed class CombatGestureGrid :
     private static readonly Color MovementColor =
         new(0.78f, 0.66f, 0.25f, 1f);
 
+    [Header("Precision de detection")]
+    [Tooltip(
+        "Rayon du premier point, en proportion de sa taille visuelle."
+    )]
+    [Range(0.1f, 1f)]
+    [SerializeField]
+    private float initialPointDetectionRadiusMultiplier = 0.5f;
+
+    [Tooltip(
+        "Rayon des points ajoutes pendant le trace, " +
+        "en proportion de leur taille visuelle."
+    )]
+    [Range(0.05f, 0.75f)]
+    [SerializeField]
+    private float draggedPointDetectionRadiusMultiplier = 0.25f;
+
     private readonly List<int> gesture = new();
     private readonly List<Image> points = new();
     private readonly List<Image> segments = new();
+    private readonly List<PointCandidate> pointCandidates = new();
 
     private FighterCombat fighter;
     private CombatHUD hud;
@@ -32,6 +49,8 @@ public sealed class CombatGestureGrid :
     private bool heldGuardStarted;
     private bool chargeStarted;
     private bool inputEnabled = true;
+    private bool hasPreviousPointerLocalPosition;
+    private Vector2 previousPointerLocalPosition;
 
     public static CombatGestureGrid Create(
         Transform parent,
@@ -180,7 +199,7 @@ public sealed class CombatGestureGrid :
         heldGuardStarted = false;
         chargeStarted = false;
         ClearGesture();
-        TryAddPoint(
+        BeginPointerTracking(
             eventData.position,
             eventData.pressEventCamera
         );
@@ -196,7 +215,7 @@ public sealed class CombatGestureGrid :
             return;
         }
 
-        TryAddPoint(
+        TrackPointerMovement(
             eventData.position,
             eventData.pressEventCamera
         );
@@ -206,6 +225,16 @@ public sealed class CombatGestureGrid :
     {
         if (eventData.pointerId != activePointerId)
             return;
+
+        if (!heldGuardStarted &&
+            !chargeStarted &&
+            inputEnabled)
+        {
+            TrackPointerMovement(
+                eventData.position,
+                eventData.pressEventCamera
+            );
+        }
 
         if (heldGuardStarted)
         {
@@ -297,56 +326,238 @@ public sealed class CombatGestureGrid :
         label.text = ((char)('A' + index)).ToString();
     }
 
-    private void TryAddPoint(
+    private void BeginPointerTracking(
         Vector2 screenPosition,
         Camera eventCamera)
     {
-        int closestPoint =
-            FindClosestPoint(screenPosition, eventCamera);
-        if (closestPoint < 0 ||
-            gesture.Contains(closestPoint))
+        if (!TryResolvePointerLocalPosition(
+                screenPosition,
+                eventCamera,
+                out Vector2 localPosition))
         {
             return;
         }
 
-        if (gesture.Count > 0)
-            AddSegment(gesture[^1], closestPoint);
+        previousPointerLocalPosition = localPosition;
+        hasPreviousPointerLocalPosition = true;
+        TryAddInitialPointAt(localPosition);
+    }
 
-        gesture.Add(closestPoint);
-        HighlightPoint(closestPoint, 1f);
+    private void TrackPointerMovement(
+        Vector2 screenPosition,
+        Camera eventCamera)
+    {
+        if (!TryResolvePointerLocalPosition(
+                screenPosition,
+                eventCamera,
+                out Vector2 localPosition))
+        {
+            return;
+        }
+
+        if (!hasPreviousPointerLocalPosition)
+        {
+            previousPointerLocalPosition = localPosition;
+            hasPreviousPointerLocalPosition = true;
+            TryAddInitialPointAt(localPosition);
+            return;
+        }
+
+        float firstSelectedProgress = 0f;
+        if (gesture.Count == 0)
+        {
+            if (!TryAddFirstPointAlongSegment(
+                    previousPointerLocalPosition,
+                    localPosition,
+                    out firstSelectedProgress))
+            {
+                previousPointerLocalPosition = localPosition;
+                return;
+            }
+        }
+
+        AddDraggedPointsAlongSegment(
+            previousPointerLocalPosition,
+            localPosition,
+            firstSelectedProgress
+        );
+        previousPointerLocalPosition = localPosition;
+    }
+
+    private bool TryResolvePointerLocalPosition(
+        Vector2 screenPosition,
+        Camera eventCamera,
+        out Vector2 localPosition)
+    {
+        return RectTransformUtility.ScreenPointToLocalPointInRectangle(
+            (RectTransform)transform,
+            screenPosition,
+            eventCamera,
+            out localPosition
+        );
+    }
+
+    private void TryAddInitialPointAt(Vector2 localPosition)
+    {
+        int closestPoint = -1;
+        float closestDistance = float.PositiveInfinity;
+
+        for (int index = 0; index < points.Count; index++)
+        {
+            Vector2 pointPosition =
+                points[index].rectTransform.anchoredPosition;
+            float distance = Vector2.Distance(
+                localPosition,
+                pointPosition
+            );
+            float radius = GetPointDetectionRadius(index, true);
+
+            if (distance > radius ||
+                distance >= closestDistance)
+            {
+                continue;
+            }
+
+            closestDistance = distance;
+            closestPoint = index;
+        }
+
+        if (closestPoint >= 0)
+            AddPointToGesture(closestPoint);
+    }
+
+    private bool TryAddFirstPointAlongSegment(
+        Vector2 from,
+        Vector2 to,
+        out float selectedProgress)
+    {
+        int selectedPoint = -1;
+        selectedProgress = float.PositiveInfinity;
+
+        for (int index = 0; index < points.Count; index++)
+        {
+            float distance = DistanceToSegment(
+                points[index].rectTransform.anchoredPosition,
+                from,
+                to,
+                out float progress
+            );
+
+            if (distance >
+                    GetPointDetectionRadius(index, true) ||
+                progress >= selectedProgress)
+            {
+                continue;
+            }
+
+            selectedPoint = index;
+            selectedProgress = progress;
+        }
+
+        if (selectedPoint < 0)
+        {
+            selectedProgress = 0f;
+            return false;
+        }
+
+        AddPointToGesture(selectedPoint);
+        return true;
+    }
+
+    private void AddDraggedPointsAlongSegment(
+        Vector2 from,
+        Vector2 to,
+        float minimumProgress)
+    {
+        pointCandidates.Clear();
+
+        for (int index = 0; index < points.Count; index++)
+        {
+            if (gesture.Contains(index))
+                continue;
+
+            float distance = DistanceToSegment(
+                points[index].rectTransform.anchoredPosition,
+                from,
+                to,
+                out float progress
+            );
+
+            if (progress + Mathf.Epsilon < minimumProgress ||
+                distance >
+                GetPointDetectionRadius(index, false))
+            {
+                continue;
+            }
+
+            pointCandidates.Add(
+                new PointCandidate(index, progress)
+            );
+        }
+
+        pointCandidates.Sort(
+            (left, right) =>
+                left.Progress.CompareTo(right.Progress)
+        );
+
+        foreach (PointCandidate candidate in pointCandidates)
+            AddPointToGesture(candidate.Index);
+    }
+
+    private float GetPointDetectionRadius(
+        int pointIndex,
+        bool isInitialPoint)
+    {
+        Rect pointRect = points[pointIndex].rectTransform.rect;
+        float visualSize = Mathf.Min(
+            pointRect.width,
+            pointRect.height
+        );
+        float multiplier = isInitialPoint
+            ? initialPointDetectionRadiusMultiplier
+            : draggedPointDetectionRadiusMultiplier;
+
+        return visualSize * multiplier;
+    }
+
+    private static float DistanceToSegment(
+        Vector2 point,
+        Vector2 from,
+        Vector2 to,
+        out float progress)
+    {
+        Vector2 segment = to - from;
+        float squaredLength = segment.sqrMagnitude;
+
+        if (squaredLength <= Mathf.Epsilon)
+        {
+            progress = 0f;
+            return Vector2.Distance(point, from);
+        }
+
+        progress = Mathf.Clamp01(
+            Vector2.Dot(point - from, segment) /
+            squaredLength
+        );
+        Vector2 closestPoint = from + segment * progress;
+        return Vector2.Distance(point, closestPoint);
+    }
+
+    private void AddPointToGesture(int pointIndex)
+    {
+        if (gesture.Contains(pointIndex))
+            return;
+
+        if (gesture.Count > 0)
+            AddSegment(gesture[^1], pointIndex);
+
+        gesture.Add(pointIndex);
+        HighlightPoint(pointIndex, 1f);
         ShowFeedback(
             FormatGesture(),
             RowColor(gesture[0]),
             0.7f
         );
-    }
-
-    private int FindClosestPoint(
-        Vector2 screenPosition,
-        Camera eventCamera)
-    {
-        int closest = -1;
-        float closestDistance = 120f;
-
-        for (int index = 0; index < points.Count; index++)
-        {
-            Vector2 pointPosition =
-                RectTransformUtility.WorldToScreenPoint(
-                    eventCamera,
-                    points[index].rectTransform.position
-                );
-            float distance = Vector2.Distance(
-                screenPosition,
-                pointPosition
-            );
-            if (distance >= closestDistance)
-                continue;
-
-            closestDistance = distance;
-            closest = index;
-        }
-
-        return closest;
     }
 
     private void AddSegment(int fromIndex, int toIndex)
@@ -481,6 +692,8 @@ public sealed class CombatGestureGrid :
         activePointerId = int.MinValue;
         heldGuardStarted = false;
         chargeStarted = false;
+        hasPreviousPointerLocalPosition = false;
+        previousPointerLocalPosition = Vector2.zero;
         ClearGesture();
     }
 
@@ -576,6 +789,18 @@ public sealed class CombatGestureGrid :
                     1f
                 );
                 break;
+        }
+    }
+
+    private readonly struct PointCandidate
+    {
+        public int Index { get; }
+        public float Progress { get; }
+
+        public PointCandidate(int index, float progress)
+        {
+            Index = index;
+            Progress = progress;
         }
     }
 
