@@ -21,22 +21,6 @@ public sealed class CombatGestureGrid :
     private static readonly Color MovementColor =
         new(0.78f, 0.66f, 0.25f, 1f);
 
-    [Header("Precision de detection")]
-    [Tooltip(
-        "Rayon du premier point, en proportion de sa taille visuelle."
-    )]
-    [Range(0.1f, 1f)]
-    [SerializeField]
-    private float initialPointDetectionRadiusMultiplier = 0.75f;
-
-    [Tooltip(
-        "Rayon des points ajoutes pendant le trace, " +
-        "en proportion de leur taille visuelle."
-    )]
-    [Range(0.05f, 0.75f)]
-    [SerializeField]
-    private float draggedPointDetectionRadiusMultiplier = 0.5f;
-
     private readonly List<int> gesture = new();
     private readonly List<Image> points = new();
     private readonly List<Image> segments = new();
@@ -223,16 +207,6 @@ public sealed class CombatGestureGrid :
         if (eventData.pointerId != activePointerId)
             return;
 
-        if (!heldGuardStarted &&
-            !chargeStarted &&
-            inputEnabled)
-        {
-            TryAddPoint(
-                eventData.position,
-                eventData.pressEventCamera
-            );
-        }
-
         if (heldGuardStarted)
         {
             fighter.StopHeldGuard();
@@ -327,45 +301,13 @@ public sealed class CombatGestureGrid :
         Vector2 screenPosition,
         Camera eventCamera)
     {
-        if (!RectTransformUtility.ScreenPointToLocalPointInRectangle(
-                (RectTransform)transform,
-                screenPosition,
-                eventCamera,
-                out Vector2 localPosition))
+        int closestPoint =
+            FindClosestPoint(screenPosition, eventCamera);
+        if (closestPoint < 0 ||
+            gesture.Contains(closestPoint))
         {
             return;
         }
-
-        bool isInitialPoint = gesture.Count == 0;
-        int closestPoint = -1;
-        float closestDistance = float.PositiveInfinity;
-
-        for (int index = 0; index < points.Count; index++)
-        {
-            if (gesture.Contains(index))
-                continue;
-
-            float distance = Vector2.Distance(
-                localPosition,
-                points[index].rectTransform.anchoredPosition
-            );
-            float detectionRadius = GetPointDetectionRadius(
-                index,
-                isInitialPoint
-            );
-
-            if (distance > detectionRadius ||
-                distance >= closestDistance)
-            {
-                continue;
-            }
-
-            closestDistance = distance;
-            closestPoint = index;
-        }
-
-        if (closestPoint < 0)
-            return;
 
         if (gesture.Count > 0)
             AddSegment(gesture[^1], closestPoint);
@@ -379,20 +321,32 @@ public sealed class CombatGestureGrid :
         );
     }
 
-    private float GetPointDetectionRadius(
-        int pointIndex,
-        bool isInitialPoint)
+    private int FindClosestPoint(
+        Vector2 screenPosition,
+        Camera eventCamera)
     {
-        Rect pointRect = points[pointIndex].rectTransform.rect;
-        float visualSize = Mathf.Min(
-            pointRect.width,
-            pointRect.height
-        );
-        float multiplier = isInitialPoint
-            ? initialPointDetectionRadiusMultiplier
-            : draggedPointDetectionRadiusMultiplier;
+        int closest = -1;
+        float closestDistance = 120f;
 
-        return visualSize * multiplier;
+        for (int index = 0; index < points.Count; index++)
+        {
+            Vector2 pointPosition =
+                RectTransformUtility.WorldToScreenPoint(
+                    eventCamera,
+                    points[index].rectTransform.position
+                );
+            float distance = Vector2.Distance(
+                screenPosition,
+                pointPosition
+            );
+            if (distance >= closestDistance)
+                continue;
+
+            closestDistance = distance;
+            closest = index;
+        }
+
+        return closest;
     }
 
     private void AddSegment(int fromIndex, int toIndex)
