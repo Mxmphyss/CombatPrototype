@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -96,6 +97,8 @@ public sealed class CombatGestureGrid :
     private readonly List<Vector2> traceLocalSamples = new(256);
     private readonly List<TimedGestureSample>
         normalizedSamples = new(256);
+    private readonly List<int> liveProjectedZones = new(24);
+    private readonly int[] debugSingleZone = new int[1];
 
     private CombatHUD hud;
     private CombatGestureCommandRouter commandRouter;
@@ -119,6 +122,11 @@ public sealed class CombatGestureGrid :
     private Vector2 lastMovementAnchorNormalized;
     private Vector2 currentPointerLocalPosition;
     private Vector2 currentNormalizedPosition;
+
+    public event Action<GestureDebugEventData> GestureStarted;
+    public event Action<GestureDebugEventData> GestureUpdated;
+    public event Action<GestureDebugEventData> GestureCompleted;
+    public event Action<GestureDebugEventData> GestureFailed;
 
     public static CombatGestureGrid Create(
         Transform parent,
@@ -260,6 +268,7 @@ public sealed class CombatGestureGrid :
             action.CombatResult == CombatActionResult.Started;
         activeHoldZone = startingZone;
         PresentAction(action);
+        PublishHoldCompleted(startingZone, action);
 
         if (holdStarted)
             HighlightPoint(activeHoldZone, 1f);
@@ -327,6 +336,8 @@ public sealed class CombatGestureGrid :
             startingNormalizedPosition,
             middleOuterOffset
         );
+        liveProjectedZones.Clear();
+        liveProjectedZones.Add(startingZone);
         hasPointerLocalPosition = true;
         AddGestureSample(
             localPosition,
@@ -335,6 +346,12 @@ public sealed class CombatGestureGrid :
         );
         HighlightPoint(startingZone, 1f);
         UpdateRibbon();
+        GestureStarted?.Invoke(
+            GestureDebugEventData.Tracking(
+                GestureDebugPhase.Started,
+                liveProjectedZones
+            )
+        );
     }
 
     public void OnDrag(PointerEventData eventData)
@@ -390,9 +407,10 @@ public sealed class CombatGestureGrid :
         if (isTap)
         {
             int tapZone = startingZone;
-            ResetPointerState();
             RoutedGestureAction tapAction =
                 commandRouter.ExecuteTap(tapZone);
+            PublishTapCompleted(tapZone, tapAction);
+            ResetPointerState();
             PresentAction(tapAction);
             StartRecognitionFeedback(
                 new[] { tapZone },
@@ -428,6 +446,7 @@ public sealed class CombatGestureGrid :
         currentNormalizedPosition =
             LocalToNormalized(localPosition);
         hasPointerLocalPosition = true;
+        TrackLiveZone(currentNormalizedPosition);
 
         float displacementSquared =
             (currentNormalizedPosition -
@@ -657,6 +676,10 @@ public sealed class CombatGestureGrid :
                     commandRouter.ExecuteStroke(
                         recognitionResult
                     );
+                PublishRecognitionCompleted(
+                    recognitionResult,
+                    action
+                );
                 PresentAction(action);
                 StartRecognitionFeedback(
                     recognitionResult.Zones,
@@ -665,6 +688,9 @@ public sealed class CombatGestureGrid :
                 break;
 
             case GestureRecognitionStatus.Ambiguous:
+                PublishRecognitionFailed(
+                    recognitionResult
+                );
                 ShowFeedback(
                     "Geste ambigu",
                     Color.white,
@@ -673,6 +699,9 @@ public sealed class CombatGestureGrid :
                 break;
 
             default:
+                PublishRecognitionFailed(
+                    recognitionResult
+                );
                 ShowFeedback(
                     "Geste invalide",
                     Color.white,
@@ -790,6 +819,7 @@ public sealed class CombatGestureGrid :
         lastMovementAnchorNormalized = Vector2.zero;
         currentNormalizedPosition = Vector2.zero;
         currentPointerLocalPosition = Vector2.zero;
+        liveProjectedZones.Clear();
         ClearRecordedGesture();
 
         if (ribbon != null)
@@ -949,5 +979,111 @@ public sealed class CombatGestureGrid :
         if (index is >= 6 and <= 8)
             return movementColor;
         return Color.white;
+    }
+
+    private void TrackLiveZone(Vector2 normalizedPosition)
+    {
+        int zone = HybridGestureRecognizer.GetZone(
+            normalizedPosition,
+            middleOuterOffset
+        );
+
+        if (liveProjectedZones.Count > 0 &&
+            liveProjectedZones[^1] == zone)
+        {
+            return;
+        }
+
+        if (liveProjectedZones.Count < 24)
+            liveProjectedZones.Add(zone);
+
+        GestureUpdated?.Invoke(
+            GestureDebugEventData.Tracking(
+                GestureDebugPhase.Updated,
+                liveProjectedZones
+            )
+        );
+    }
+
+    private void PublishTapCompleted(
+        int zone,
+        RoutedGestureAction action)
+    {
+        debugSingleZone[0] = zone;
+        GestureCompleted?.Invoke(
+            new GestureDebugEventData(
+                GestureDebugPhase.Completed,
+                GestureInputKind.Tap,
+                GestureRecognitionStatus.Recognized,
+                CombatGestureId.Tap,
+                debugSingleZone,
+                action.IsMapped,
+                action.HasCombatResult,
+                action.CombatResult,
+                action.Label
+            )
+        );
+    }
+
+    private void PublishHoldCompleted(
+        int zone,
+        RoutedGestureAction action)
+    {
+        debugSingleZone[0] = zone;
+        GestureCompleted?.Invoke(
+            new GestureDebugEventData(
+                GestureDebugPhase.Completed,
+                GestureInputKind.Hold,
+                GestureRecognitionStatus.Recognized,
+                zone == MiddleDefenseZone
+                    ? CombatGestureId.HeldGuard
+                    : CombatGestureId.StaminaCharge,
+                debugSingleZone,
+                action.IsMapped,
+                action.HasCombatResult,
+                action.CombatResult,
+                action.Label
+            )
+        );
+    }
+
+    private void PublishRecognitionCompleted(
+        GestureRecognitionResult recognitionResult,
+        RoutedGestureAction action)
+    {
+        GestureCompleted?.Invoke(
+            new GestureDebugEventData(
+                GestureDebugPhase.Completed,
+                recognitionResult.InputKind,
+                recognitionResult.Status,
+                recognitionResult.GestureId,
+                recognitionResult.Zones,
+                action.IsMapped,
+                action.HasCombatResult,
+                action.CombatResult,
+                action.Label
+            )
+        );
+    }
+
+    private void PublishRecognitionFailed(
+        GestureRecognitionResult recognitionResult)
+    {
+        GestureFailed?.Invoke(
+            new GestureDebugEventData(
+                GestureDebugPhase.Failed,
+                recognitionResult.InputKind,
+                recognitionResult.Status,
+                recognitionResult.GestureId,
+                recognitionResult.Zones,
+                false,
+                false,
+                CombatActionResult.Unavailable,
+                recognitionResult.Status ==
+                    GestureRecognitionStatus.Ambiguous
+                        ? "Geste ambigu"
+                        : "Geste invalide"
+            )
+        );
     }
 }

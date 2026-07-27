@@ -9,6 +9,7 @@ public sealed class CombatManager : MonoBehaviour
     private CombatHUD hud;
     private EnemyAutoCombat enemyAI;
     private CombatFeedbackEffects feedbackEffects;
+    private PrototypeDebugUI prototypeDebugUI;
     private bool combatEnded;
     private bool isResetting;
 
@@ -76,6 +77,12 @@ public sealed class CombatManager : MonoBehaviour
                     EnemyAutoCombat>();
         }
 
+        prototypeDebugUI = PrototypeDebugUI.Create(
+            hud.transform,
+            enemyAI,
+            hud.GestureGrid
+        );
+
         feedbackEffects =
             gameObject.AddComponent<CombatFeedbackEffects>();
         feedbackEffects.Initialize(
@@ -124,6 +131,7 @@ public sealed class CombatManager : MonoBehaviour
         hud.SetGridEnabled(true);
 
         enemyAI.Initialize(enemyCombat, playerCombat, hud);
+        prototypeDebugUI?.ResetForReplay();
         isResetting = false;
     }
 
@@ -136,6 +144,7 @@ public sealed class CombatManager : MonoBehaviour
         hud.SetGridEnabled(true);
         hud.RefreshAll();
         enemyAI.Initialize(enemyCombat, playerCombat, hud);
+        prototypeDebugUI?.ResetForReplay();
     }
 
     private void EndCombat(bool playerWon)

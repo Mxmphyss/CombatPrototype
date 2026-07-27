@@ -1,8 +1,13 @@
+using System;
 using System.Collections;
 using UnityEngine;
 
 public sealed class EnemyAutoCombat : MonoBehaviour
 {
+    [Header("Prototype Debug")]
+    [SerializeField]
+    private bool enemyAIEnabled = true;
+
     [Header("Rythme")]
     [Min(0f)]
     [SerializeField] private float minimumDelay = 1.5f;
@@ -23,6 +28,11 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     private Coroutine combatRoutine;
     private Vector3 normalScale;
     private bool initialized;
+    private bool appliedAIEnabled = true;
+
+    public event Action<bool> OnAIEnabledChanged;
+
+    public bool EnemyAIEnabled => enemyAIEnabled;
 
     public void Initialize(
         FighterCombat enemyCombat,
@@ -36,8 +46,15 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         hud = combatHud;
         normalScale = transform.localScale;
         initialized = true;
+        appliedAIEnabled = enemyAIEnabled;
 
         StartAI();
+    }
+
+    private void Update()
+    {
+        if (appliedAIEnabled != enemyAIEnabled)
+            ApplyAIEnabledState();
     }
 
     private void OnDisable()
@@ -48,6 +65,7 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     public void StartAI()
     {
         if (!initialized ||
+            !enemyAIEnabled ||
             combatRoutine != null ||
             !CanContinue())
         {
@@ -77,24 +95,35 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         StartAI();
     }
 
+    public void SetAIEnabled(bool enabled)
+    {
+        enemyAIEnabled = enabled;
+        ApplyAIEnabledState();
+    }
+
     private IEnumerator CombatLoop()
     {
         while (CanContinue())
         {
-            float delay = Random.Range(
+            yield return WaitUntilAIEnabled();
+
+            if (!CanAct())
+                continue;
+
+            float delay = UnityEngine.Random.Range(
                 Mathf.Min(minimumDelay, maximumDelay),
                 Mathf.Max(minimumDelay, maximumDelay)
             );
             yield return WaitWhileCombatContinues(delay);
 
-            if (!CanContinue())
-                break;
+            if (!CanAct())
+                continue;
 
             while (enemy.IsBusy && CanContinue())
                 yield return null;
 
-            if (!CanContinue())
-                break;
+            if (!CanAct())
+                continue;
 
             if (enemy.Stats.CurrentStamina + Mathf.Epsilon <
                 enemy.LightAttackStaminaCost)
@@ -102,8 +131,8 @@ public sealed class EnemyAutoCombat : MonoBehaviour
                 yield return RechargeUntilAttackIsAvailable();
             }
 
-            if (!CanContinue())
-                break;
+            if (!CanAct())
+                continue;
 
             CombatActionResult result =
                 enemy.LightAttack(telegraphDuration);
@@ -130,7 +159,7 @@ public sealed class EnemyAutoCombat : MonoBehaviour
             }
 
             RestoreScale();
-            if (CanContinue())
+            if (CanAct())
                 hud.SetEnemyStatus(string.Empty);
         }
 
@@ -163,6 +192,12 @@ public sealed class EnemyAutoCombat : MonoBehaviour
                enemy.Stats.CurrentStamina + Mathf.Epsilon <
                enemy.LightAttackStaminaCost)
         {
+            if (!enemyAIEnabled)
+            {
+                yield return null;
+                continue;
+            }
+
             if (!enemy.IsCharging)
             {
                 CombatActionResult result = enemy.StartCharge();
@@ -176,9 +211,10 @@ public sealed class EnemyAutoCombat : MonoBehaviour
             yield return null;
         }
 
-        enemy.StopChargeInput();
+        if (enemyAIEnabled)
+            enemy.StopChargeInput();
 
-        if (CanContinue())
+        if (CanAct())
         {
             hud.SetEnemyStatus(string.Empty);
             yield return new WaitForSeconds(0.15f);
@@ -190,9 +226,16 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         float elapsed = 0f;
         while (elapsed < duration && CanContinue())
         {
-            elapsed += Time.deltaTime;
+            if (enemyAIEnabled)
+                elapsed += Time.deltaTime;
             yield return null;
         }
+    }
+
+    private IEnumerator WaitUntilAIEnabled()
+    {
+        while (CanContinue() && !enemyAIEnabled)
+            yield return null;
     }
 
     private bool CanContinue()
@@ -205,6 +248,24 @@ public sealed class EnemyAutoCombat : MonoBehaviour
                player != null &&
                !enemy.IsDead &&
                !player.IsDead;
+    }
+
+    private bool CanAct()
+    {
+        return enemyAIEnabled && CanContinue();
+    }
+
+    private void ApplyAIEnabledState()
+    {
+        bool changed =
+            appliedAIEnabled != enemyAIEnabled;
+        appliedAIEnabled = enemyAIEnabled;
+
+        if (enemyAIEnabled)
+            StartAI();
+
+        if (changed)
+            OnAIEnabledChanged?.Invoke(enemyAIEnabled);
     }
 
     private void RestoreScale()

@@ -39,6 +39,7 @@ public sealed class CombatHUD : MonoBehaviour
     private Coroutine feedbackRoutine;
 
     public bool BattleEnded { get; private set; }
+    public CombatGestureGrid GestureGrid => gestureGrid;
 
     public static CombatHUD Create(
         FighterCombat player,
