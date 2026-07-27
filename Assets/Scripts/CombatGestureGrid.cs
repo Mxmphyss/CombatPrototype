@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 public sealed class CombatGestureGrid :
@@ -24,11 +25,11 @@ public sealed class CombatGestureGrid :
     [Header("Detection tactile")]
     [SerializeField]
     [Min(1f)]
-    private float initialPointDetectionRadius = 50f;
+    private float initialPointDetectionRadius = 60f;
 
     [SerializeField]
     [Min(1f)]
-    private float draggedPointDetectionRadius = 42f;
+    private float draggedPointDetectionRadius = 55f;
 
     [Header("Trace du geste")]
     [SerializeField]
@@ -36,7 +37,7 @@ public sealed class CombatGestureGrid :
 
     [SerializeField]
     [Min(1f)]
-    private float traceLineWidth = 10f;
+    private float traceLineWidth = 16f;
 
     [SerializeField]
     [Range(0f, 1f)]
@@ -50,6 +51,8 @@ public sealed class CombatGestureGrid :
 
     private FighterCombat fighter;
     private CombatHUD hud;
+    private Camera activeEventCamera;
+    private Pointer activePointerDevice;
     private int activePointerId = int.MinValue;
     private float pointerDownTime;
     private bool heldGuardStarted;
@@ -107,6 +110,8 @@ public sealed class CombatGestureGrid :
 
     private void Update()
     {
+        UpdateLiveTraceEndpoint();
+
         if (!inputEnabled ||
             activePointerId == int.MinValue ||
             gesture.Count != 1)
@@ -187,6 +192,35 @@ public sealed class CombatGestureGrid :
         }
     }
 
+    private void UpdateLiveTraceEndpoint()
+    {
+        if (!inputEnabled ||
+            activePointerId == int.MinValue ||
+            gesture.Count == 0)
+        {
+            return;
+        }
+
+        Pointer pointer =
+            activePointerDevice ?? Pointer.current;
+        if (pointer == null)
+            return;
+
+        Vector2 screenPosition =
+            pointer.position.ReadValue();
+
+        if (!TryGetPointerLocalPosition(
+                screenPosition,
+                activeEventCamera,
+                out Vector2 localPosition))
+        {
+            return;
+        }
+
+        currentPointerLocalPosition = localPosition;
+        UpdateTraceVisual();
+    }
+
     private void OnDisable()
     {
         CancelPointerAction();
@@ -203,6 +237,8 @@ public sealed class CombatGestureGrid :
         }
 
         activePointerId = eventData.pointerId;
+        activeEventCamera = eventData.pressEventCamera;
+        activePointerDevice = Pointer.current;
         pointerDownTime = Time.unscaledTime;
         heldGuardStarted = false;
         chargeStarted = false;
@@ -433,7 +469,9 @@ public sealed class CombatGestureGrid :
                     left.Progress.CompareTo(right.Progress);
                 return progressComparison != 0
                     ? progressComparison
-                    : left.Distance.CompareTo(right.Distance);
+                    : left.DistanceSquared.CompareTo(
+                        right.DistanceSquared
+                    );
             }
         );
 
@@ -453,30 +491,33 @@ public sealed class CombatGestureGrid :
     {
         selectedPoint = -1;
         selectedProgress = float.PositiveInfinity;
-        float selectedDistance = float.PositiveInfinity;
+        float selectedDistanceSquared = float.PositiveInfinity;
+        float radiusSquared =
+            initialPointDetectionRadius *
+            initialPointDetectionRadius;
 
         for (int index = 0; index < points.Count; index++)
         {
-            float distance = DistanceToSegment(
+            float distanceSquared = DistanceSquaredToSegment(
                 GetPointLocalPosition(index),
                 from,
                 to,
                 out float progress
             );
 
-            if (distance > initialPointDetectionRadius ||
+            if (distanceSquared > radiusSquared ||
                 progress > selectedProgress ||
                 (Mathf.Approximately(
                      progress,
                      selectedProgress) &&
-                 distance >= selectedDistance))
+                 distanceSquared >= selectedDistanceSquared))
             {
                 continue;
             }
 
             selectedPoint = index;
             selectedProgress = progress;
-            selectedDistance = distance;
+            selectedDistanceSquared = distanceSquared;
         }
 
         if (selectedPoint >= 0)
@@ -492,13 +533,16 @@ public sealed class CombatGestureGrid :
         float minimumProgress)
     {
         pointCandidates.Clear();
+        float radiusSquared =
+            draggedPointDetectionRadius *
+            draggedPointDetectionRadius;
 
         for (int index = 0; index < points.Count; index++)
         {
             if (gesture.Contains(index))
                 continue;
 
-            float distance = DistanceToSegment(
+            float distanceSquared = DistanceSquaredToSegment(
                 GetPointLocalPosition(index),
                 from,
                 to,
@@ -506,13 +550,17 @@ public sealed class CombatGestureGrid :
             );
 
             if (progress + Mathf.Epsilon < minimumProgress ||
-                distance > draggedPointDetectionRadius)
+                distanceSquared > radiusSquared)
             {
                 continue;
             }
 
             pointCandidates.Add(
-                new PointCandidate(index, progress, distance)
+                new PointCandidate(
+                    index,
+                    progress,
+                    distanceSquared
+                )
             );
         }
     }
@@ -605,7 +653,7 @@ public sealed class CombatGestureGrid :
         );
     }
 
-    private static float DistanceToSegment(
+    private static float DistanceSquaredToSegment(
         Vector2 point,
         Vector2 from,
         Vector2 to,
@@ -617,7 +665,7 @@ public sealed class CombatGestureGrid :
         if (squaredLength <= Mathf.Epsilon)
         {
             progress = 0f;
-            return Vector2.Distance(point, from);
+            return (point - from).sqrMagnitude;
         }
 
         progress = Mathf.Clamp01(
@@ -625,7 +673,7 @@ public sealed class CombatGestureGrid :
             squaredLength
         );
         Vector2 closestPoint = from + segment * progress;
-        return Vector2.Distance(point, closestPoint);
+        return (point - closestPoint).sqrMagnitude;
     }
 
     private void UpdateTraceVisual()
@@ -799,6 +847,8 @@ public sealed class CombatGestureGrid :
     private void ResetPointerState()
     {
         activePointerId = int.MinValue;
+        activeEventCamera = null;
+        activePointerDevice = null;
         heldGuardStarted = false;
         chargeStarted = false;
         hasPointerLocalPosition = false;
@@ -901,16 +951,16 @@ public sealed class CombatGestureGrid :
     {
         public int Index { get; }
         public float Progress { get; }
-        public float Distance { get; }
+        public float DistanceSquared { get; }
 
         public PointCandidate(
             int index,
             float progress,
-            float distance)
+            float distanceSquared)
         {
             Index = index;
             Progress = progress;
-            Distance = distance;
+            DistanceSquared = distanceSquared;
         }
     }
 
