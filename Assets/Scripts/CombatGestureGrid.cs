@@ -1,3 +1,4 @@
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
@@ -8,59 +9,116 @@ public sealed class CombatGestureGrid :
     MonoBehaviour,
     IPointerDownHandler,
     IDragHandler,
-    IPointerUpHandler
+    IPointerUpHandler,
+    ICancelHandler
 {
     private const int GridSize = 3;
-    private const int MiddleDefensePoint = 4;
-    private const int MiddleMovementPoint = 7;
-    private const float HoldThreshold = 0.28f;
+    private const int MiddleDefenseZone = 4;
+    private const int MiddleMovementZone = 7;
 
-    private static readonly Color AttackColor =
+    [Header("Couleurs des categories")]
+    [SerializeField]
+    private Color attackColor =
         new(0.82f, 0.26f, 0.22f, 1f);
-    private static readonly Color DefenseColor =
+
+    [SerializeField]
+    private Color defenseColor =
         new(0.24f, 0.55f, 0.78f, 1f);
-    private static readonly Color MovementColor =
+
+    [SerializeField]
+    private Color movementColor =
         new(0.78f, 0.66f, 0.25f, 1f);
 
-    [Header("Detection tactile")]
+    [Header("Surface tactile")]
     [SerializeField]
-    [Min(1f)]
-    private float initialPointDetectionRadius = 60f;
+    private Vector2 padSize = new(650f, 540f);
 
     [SerializeField]
-    [Min(1f)]
-    private float draggedPointDetectionRadius = 55f;
+    private Vector2 padAnchoredPosition = new(0f, 205f);
 
-    [Header("Trace du geste")]
+    [Range(0f, 0.3f)]
+    [SerializeField]
+    private float middleOuterOffset = 0.1f;
+
+    [Header("Appui et maintien")]
+    [Min(0.05f)]
+    [SerializeField]
+    private float holdThreshold = 0.28f;
+
+    [Range(0.005f, 0.2f)]
+    [SerializeField]
+    private float tapMovementThreshold = 0.065f;
+
+    [Range(0.005f, 0.2f)]
+    [SerializeField]
+    private float holdMovementTolerance = 0.05f;
+
+    [Header("Echantillonnage")]
+    [Range(0.001f, 0.05f)]
+    [SerializeField]
+    private float sampleSpacingNormalized = 0.008f;
+
+    [Range(32, 512)]
+    [SerializeField]
+    private int maximumRecordedSamples = 256;
+
+    [Header("Ruban lumineux")]
     [SerializeField]
     private bool traceEnabled = true;
 
-    [SerializeField]
     [Min(1f)]
-    private float traceLineWidth = 16f;
-
     [SerializeField]
+    private float traceLineWidth = 64f;
+
     [Range(0f, 1f)]
-    private float traceAlpha = 0.82f;
+    [SerializeField]
+    private float traceAlpha = 0.58f;
 
-    private readonly List<int> gesture = new();
-    private readonly List<Image> points = new();
-    private readonly List<Image> segments = new();
-    private readonly List<PointCandidate> pointCandidates =
+    [Range(4, 20)]
+    [SerializeField]
+    private int traceRoundSegments = 10;
+
+    [Header("Reconnaissance")]
+    [SerializeField]
+    private HybridGestureRecognizerSettings recognition =
+        new();
+
+    [Header("Confirmation visuelle")]
+    [SerializeField]
+    private bool recognitionFeedbackEnabled = true;
+
+    [Range(0.05f, 1f)]
+    [SerializeField]
+    private float recognitionFeedbackDuration = 0.22f;
+
+    private readonly List<Image> points =
         new(GridSize * GridSize);
+    private readonly List<Vector2> traceLocalSamples = new(256);
+    private readonly List<TimedGestureSample>
+        normalizedSamples = new(256);
 
-    private FighterCombat fighter;
     private CombatHUD hud;
+    private CombatGestureCommandRouter commandRouter;
+    private HybridGestureRecognizer gestureRecognizer;
+    private GestureRibbonGraphic ribbon;
     private Camera activeEventCamera;
     private Pointer activePointerDevice;
+    private Coroutine recognitionFeedbackRoutine;
     private int activePointerId = int.MinValue;
+    private int startingZone = -1;
+    private int activeHoldZone = -1;
     private float pointerDownTime;
-    private bool heldGuardStarted;
-    private bool chargeStarted;
+    private float lastMeaningfulMovementTime;
+    private float maximumDisplacementSquared;
     private bool inputEnabled = true;
+    private bool holdAttempted;
+    private bool holdStarted;
+    private bool strokeFollowedByHold;
     private bool hasPointerLocalPosition;
-    private Vector2 previousPointerLocalPosition;
+    private Vector2 startingNormalizedPosition;
+    private Vector2 lastMovementAnchorNormalized;
     private Vector2 currentPointerLocalPosition;
+    private Vector2 currentNormalizedPosition;
 
     public static CombatGestureGrid Create(
         Transform parent,
@@ -70,19 +128,20 @@ public sealed class CombatGestureGrid :
         GameObject gridObject = new("Combat Gesture Grid");
         gridObject.transform.SetParent(parent, false);
 
-        RectTransform rect = gridObject.AddComponent<RectTransform>();
+        RectTransform rect =
+            gridObject.AddComponent<RectTransform>();
         rect.anchorMin = new Vector2(0.5f, 0f);
         rect.anchorMax = new Vector2(0.5f, 0f);
         rect.pivot = new Vector2(0.5f, 0f);
-        rect.anchoredPosition = new Vector2(0f, 205f);
-        rect.sizeDelta = new Vector2(650f, 540f);
 
         Image surface = gridObject.AddComponent<Image>();
-        surface.color = new Color(0.025f, 0.035f, 0.055f, 0.08f);
+        surface.color =
+            new Color(0.025f, 0.035f, 0.055f, 0.08f);
         surface.raycastTarget = true;
 
         Outline outline = gridObject.AddComponent<Outline>();
-        outline.effectColor = new Color(0.7f, 0.78f, 0.9f, 0.08f);
+        outline.effectColor =
+            new Color(0.7f, 0.78f, 0.9f, 0.08f);
         outline.effectDistance = new Vector2(1f, -1f);
 
         CombatGestureGrid grid =
@@ -95,108 +154,52 @@ public sealed class CombatGestureGrid :
     {
         inputEnabled = enabled;
         if (!enabled)
+        {
             CancelPointerAction();
+            CancelRecognitionFeedback();
+        }
     }
 
     private void Initialize(
         FighterCombat player,
         CombatHUD combatHud)
     {
-        fighter = player;
         hud = combatHud;
-        BuildTraceSegments();
+        commandRouter =
+            new CombatGestureCommandRouter(player);
+        gestureRecognizer =
+            new HybridGestureRecognizer(
+                recognition,
+                middleOuterOffset
+            );
+
+        RectTransform rect = (RectTransform)transform;
+        rect.anchoredPosition = padAnchoredPosition;
+        rect.sizeDelta = padSize;
+
+        BuildRibbon();
         BuildPoints();
+        ResetPointerState();
     }
 
     private void Update()
     {
-        UpdateLiveTraceEndpoint();
-
-        if (!inputEnabled ||
-            activePointerId == int.MinValue ||
-            gesture.Count != 1)
+        if (activePointerId != int.MinValue &&
+            commandRouter != null &&
+            commandRouter.ShouldCancelInput)
         {
+            CancelPointerAction();
             return;
         }
 
-        if (heldGuardStarted)
-        {
-            PulsePoint(MiddleDefensePoint);
-            return;
-        }
-
-        if (chargeStarted)
-        {
-            PulsePoint(MiddleMovementPoint);
-            return;
-        }
-
-        int firstPoint = gesture[0];
-        if (firstPoint is not MiddleDefensePoint and
-            not MiddleMovementPoint)
-        {
-            return;
-        }
-
-        if (Time.unscaledTime - pointerDownTime < HoldThreshold)
-            return;
-
-        if (firstPoint == MiddleDefensePoint)
-        {
-            CombatActionResult guardResult =
-                fighter.StartHeldGuard();
-            heldGuardStarted =
-                guardResult == CombatActionResult.Started;
-
-            if (heldGuardStarted)
-            {
-                HighlightPoint(MiddleDefensePoint, 1f);
-                ShowFeedback(
-                    "Garde maintenue",
-                    DefenseColor,
-                    0.8f
-                );
-            }
-            else
-            {
-                ShowActionResult(
-                    guardResult,
-                    "Garde maintenue",
-                    DefenseColor
-                );
-            }
-
-            return;
-        }
-
-        CombatActionResult chargeResult = fighter.StartCharge();
-        chargeStarted =
-            chargeResult == CombatActionResult.Started;
-
-        if (chargeStarted)
-        {
-            HighlightPoint(MiddleMovementPoint, 1f);
-            ShowFeedback(
-                "Recharge endurance",
-                MovementColor,
-                0.8f
-            );
-        }
-        else
-        {
-            ShowActionResult(
-                chargeResult,
-                "Recharge endurance",
-                MovementColor
-            );
-        }
+        UpdateLivePointer();
+        UpdateHoldRecognition();
     }
 
-    private void UpdateLiveTraceEndpoint()
+    private void UpdateLivePointer()
     {
         if (!inputEnabled ||
-            activePointerId == int.MinValue ||
-            gesture.Count == 0)
+            activePointerId == int.MinValue)
         {
             return;
         }
@@ -208,7 +211,6 @@ public sealed class CombatGestureGrid :
 
         Vector2 screenPosition =
             pointer.position.ReadValue();
-
         if (!TryGetPointerLocalPosition(
                 screenPosition,
                 activeEventCamera,
@@ -217,52 +219,141 @@ public sealed class CombatGestureGrid :
             return;
         }
 
-        currentPointerLocalPosition = localPosition;
-        UpdateTraceVisual();
+        UpdatePointerPosition(localPosition, false);
+    }
+
+    private void UpdateHoldRecognition()
+    {
+        if (!inputEnabled ||
+            activePointerId == int.MinValue ||
+            holdAttempted ||
+            holdStarted ||
+            !hasPointerLocalPosition ||
+            maximumDisplacementSquared >
+            holdMovementTolerance * holdMovementTolerance)
+        {
+            if (holdStarted)
+                PulsePoint(activeHoldZone);
+            return;
+        }
+
+        if (Time.unscaledTime - pointerDownTime <
+            holdThreshold)
+        {
+            return;
+        }
+
+        if (startingZone is not MiddleDefenseZone and
+            not MiddleMovementZone)
+        {
+            return;
+        }
+
+        holdAttempted = true;
+        RoutedGestureAction action =
+            commandRouter.BeginHold(startingZone);
+
+        if (!action.IsMapped)
+            return;
+
+        holdStarted =
+            action.CombatResult == CombatActionResult.Started;
+        activeHoldZone = startingZone;
+        PresentAction(action);
+
+        if (holdStarted)
+            HighlightPoint(activeHoldZone, 1f);
     }
 
     private void OnDisable()
     {
         CancelPointerAction();
+        CancelRecognitionFeedback();
+    }
+
+    private void OnApplicationFocus(bool hasFocus)
+    {
+        if (!hasFocus)
+            CancelPointerAction();
+    }
+
+    private void OnApplicationPause(bool pauseStatus)
+    {
+        if (pauseStatus)
+            CancelPointerAction();
     }
 
     public void OnPointerDown(PointerEventData eventData)
     {
         if (!inputEnabled ||
             activePointerId != int.MinValue ||
-            fighter == null ||
-            fighter.IsDead)
+            commandRouter == null ||
+            commandRouter.IsDead)
         {
             return;
         }
+
+        CancelRecognitionFeedback();
+        ResetPointVisuals();
+        ClearRecordedGesture();
 
         activePointerId = eventData.pointerId;
         activeEventCamera = eventData.pressEventCamera;
         activePointerDevice = Pointer.current;
         pointerDownTime = Time.unscaledTime;
-        heldGuardStarted = false;
-        chargeStarted = false;
-        ClearGesture();
-        TrackPointer(
-            eventData.position,
-            eventData.pressEventCamera
+        lastMeaningfulMovementTime = pointerDownTime;
+        holdAttempted = false;
+        holdStarted = false;
+        strokeFollowedByHold = false;
+        activeHoldZone = -1;
+
+        if (!TryGetPointerLocalPosition(
+                eventData.position,
+                eventData.pressEventCamera,
+                out Vector2 localPosition))
+        {
+            ResetPointerState();
+            return;
+        }
+
+        currentPointerLocalPosition = localPosition;
+        currentNormalizedPosition =
+            LocalToNormalized(localPosition);
+        startingNormalizedPosition =
+            currentNormalizedPosition;
+        lastMovementAnchorNormalized =
+            currentNormalizedPosition;
+        startingZone = HybridGestureRecognizer.GetZone(
+            startingNormalizedPosition,
+            middleOuterOffset
         );
+        hasPointerLocalPosition = true;
+        AddGestureSample(
+            localPosition,
+            currentNormalizedPosition,
+            true
+        );
+        HighlightPoint(startingZone, 1f);
+        UpdateRibbon();
     }
 
     public void OnDrag(PointerEventData eventData)
     {
         if (!inputEnabled ||
-            eventData.pointerId != activePointerId ||
-            heldGuardStarted ||
-            chargeStarted)
+            eventData.pointerId != activePointerId)
         {
             return;
         }
 
-        TrackPointer(
-            eventData.position,
-            eventData.pressEventCamera
-        );
+        if (!TryGetPointerLocalPosition(
+                eventData.position,
+                eventData.pressEventCamera,
+                out Vector2 localPosition))
+        {
+            return;
+        }
+
+        UpdatePointerPosition(localPosition, false);
     }
 
     public void OnPointerUp(PointerEventData eventData)
@@ -270,98 +361,232 @@ public sealed class CombatGestureGrid :
         if (eventData.pointerId != activePointerId)
             return;
 
-        if (!heldGuardStarted &&
-            !chargeStarted &&
-            inputEnabled)
-        {
-            TrackPointer(
+        if (TryGetPointerLocalPosition(
                 eventData.position,
-                eventData.pressEventCamera
-            );
+                eventData.pressEventCamera,
+                out Vector2 localPosition))
+        {
+            UpdatePointerPosition(localPosition, true);
         }
 
-        if (heldGuardStarted)
+        if (holdStarted)
         {
-            fighter.StopHeldGuard();
+            commandRouter.EndHold(activeHoldZone);
             ShowFeedback(
-                "Garde relachee",
-                DefenseColor,
+                activeHoldZone == MiddleDefenseZone
+                    ? "Garde relachee"
+                    : "Recharge arretee",
+                ZoneColor(activeHoldZone),
                 0.8f
             );
+            ResetPointerState();
+            return;
         }
-        else if (chargeStarted)
+
+        bool isTap =
+            maximumDisplacementSquared <=
+            tapMovementThreshold * tapMovementThreshold;
+
+        if (isTap)
         {
-            fighter.StopChargeInput();
-            ShowFeedback(
-                "Recharge arretee",
-                MovementColor,
-                0.8f
+            int tapZone = startingZone;
+            ResetPointerState();
+            RoutedGestureAction tapAction =
+                commandRouter.ExecuteTap(tapZone);
+            PresentAction(tapAction);
+            StartRecognitionFeedback(
+                new[] { tapZone },
+                ZoneColor(tapZone)
             );
+            return;
         }
-        else if (inputEnabled)
+
+        GestureRecognitionResult result =
+            gestureRecognizer.Recognize(normalizedSamples);
+
+        if (strokeFollowedByHold)
         {
-            ExecuteGesture();
+            result = result.WithInputKind(
+                GestureInputKind.StrokeAndHold
+            );
         }
 
         ResetPointerState();
+        PresentRecognition(result);
     }
 
-    private void BuildTraceSegments()
+    public void OnCancel(BaseEventData eventData)
     {
-        for (int index = 0;
-             index < GridSize * GridSize;
-             index++)
+        CancelPointerAction();
+    }
+
+    private void UpdatePointerPosition(
+        Vector2 localPosition,
+        bool forceSample)
+    {
+        currentPointerLocalPosition = localPosition;
+        currentNormalizedPosition =
+            LocalToNormalized(localPosition);
+        hasPointerLocalPosition = true;
+
+        float displacementSquared =
+            (currentNormalizedPosition -
+             startingNormalizedPosition).sqrMagnitude;
+        maximumDisplacementSquared = Mathf.Max(
+            maximumDisplacementSquared,
+            displacementSquared
+        );
+        UpdateStrokeHoldState();
+
+        if (!holdStarted)
         {
-            GameObject segmentObject =
-                new($"Gesture Trace Segment {index}");
-            segmentObject.transform.SetParent(transform, false);
-
-            RectTransform segmentRect =
-                segmentObject.AddComponent<RectTransform>();
-            segmentRect.anchorMin = segmentRect.anchorMax =
-                new Vector2(0.5f, 0.5f);
-            segmentRect.sizeDelta = Vector2.zero;
-
-            Image segment = segmentObject.AddComponent<Image>();
-            segment.raycastTarget = false;
-            segmentObject.SetActive(false);
-            segments.Add(segment);
+            AddGestureSample(
+                localPosition,
+                currentNormalizedPosition,
+                forceSample
+            );
         }
+
+        UpdateRibbon();
+    }
+
+    private void UpdateStrokeHoldState()
+    {
+        float toleranceSquared =
+            holdMovementTolerance *
+            holdMovementTolerance;
+
+        if ((currentNormalizedPosition -
+             lastMovementAnchorNormalized).sqrMagnitude >
+            toleranceSquared)
+        {
+            lastMovementAnchorNormalized =
+                currentNormalizedPosition;
+            lastMeaningfulMovementTime =
+                Time.unscaledTime;
+            strokeFollowedByHold = false;
+            return;
+        }
+
+        if (maximumDisplacementSquared >
+                tapMovementThreshold *
+                tapMovementThreshold &&
+            Time.unscaledTime -
+                lastMeaningfulMovementTime >=
+                holdThreshold)
+        {
+            strokeFollowedByHold = true;
+        }
+    }
+
+    private void AddGestureSample(
+        Vector2 localPosition,
+        Vector2 normalizedPosition,
+        bool force)
+    {
+        if (!force &&
+            normalizedSamples.Count > 0 &&
+            (normalizedSamples[^1].Position -
+             normalizedPosition).sqrMagnitude <
+            sampleSpacingNormalized *
+            sampleSpacingNormalized)
+        {
+            return;
+        }
+
+        if (normalizedSamples.Count >=
+            Mathf.Max(32, maximumRecordedSamples))
+        {
+            CompactSamples();
+        }
+
+        traceLocalSamples.Add(localPosition);
+        normalizedSamples.Add(
+            new TimedGestureSample(
+                normalizedPosition,
+                Time.unscaledTime
+            )
+        );
+    }
+
+    private void CompactSamples()
+    {
+        int writeIndex = 1;
+
+        for (int readIndex = 2;
+             readIndex < normalizedSamples.Count - 1;
+             readIndex += 2)
+        {
+            normalizedSamples[writeIndex] =
+                normalizedSamples[readIndex];
+            traceLocalSamples[writeIndex] =
+                traceLocalSamples[readIndex];
+            writeIndex++;
+        }
+
+        normalizedSamples.RemoveRange(
+            writeIndex,
+            normalizedSamples.Count - writeIndex
+        );
+        traceLocalSamples.RemoveRange(
+            writeIndex,
+            traceLocalSamples.Count - writeIndex
+        );
+    }
+
+    private void BuildRibbon()
+    {
+        GameObject ribbonObject =
+            new("Gesture Ribbon");
+        ribbonObject.transform.SetParent(transform, false);
+
+        RectTransform gridRect = (RectTransform)transform;
+        RectTransform ribbonRect =
+            ribbonObject.AddComponent<RectTransform>();
+        ribbonRect.anchorMin = Vector2.zero;
+        ribbonRect.anchorMax = Vector2.one;
+        ribbonRect.pivot = gridRect.pivot;
+        ribbonRect.offsetMin = Vector2.zero;
+        ribbonRect.offsetMax = Vector2.zero;
+
+        ribbon =
+            ribbonObject.AddComponent<GestureRibbonGraphic>();
+        ribbon.raycastTarget = false;
+        ribbon.ClearPath();
     }
 
     private void BuildPoints()
     {
-        const float horizontalSpacing = 170f;
-        const float verticalSpacing = 155f;
         const float pointSize = 54f;
 
-        for (int row = 0; row < GridSize; row++)
+        for (int index = 0;
+             index < GridSize * GridSize;
+             index++)
         {
-            for (int column = 0; column < GridSize; column++)
-            {
-                int index = row * GridSize + column;
-                GameObject pointObject =
-                    new($"Gesture Point {index}");
-                pointObject.transform.SetParent(transform, false);
+            GameObject pointObject =
+                new($"Gesture Point {index}");
+            pointObject.transform.SetParent(transform, false);
 
-                RectTransform pointRect =
-                    pointObject.AddComponent<RectTransform>();
-                pointRect.anchorMin = pointRect.anchorMax =
-                    new Vector2(0.5f, 0.5f);
-                pointRect.sizeDelta =
-                    new Vector2(pointSize, pointSize);
-                pointRect.anchoredPosition = new Vector2(
-                    (column - 1) * horizontalSpacing,
-                    (1 - row) * verticalSpacing
-                );
+            RectTransform pointRect =
+                pointObject.AddComponent<RectTransform>();
+            pointRect.anchorMin = pointRect.anchorMax =
+                Vector2.zero;
+            pointRect.pivot = new Vector2(0.5f, 0.5f);
+            pointRect.sizeDelta =
+                new Vector2(pointSize, pointSize);
+            pointRect.localPosition = NormalizedToLocal(
+                HybridGestureRecognizer.GetZoneCenter(
+                    index,
+                    middleOuterOffset
+                )
+            );
 
-                Image point = pointObject.AddComponent<Image>();
-                point.color = RestingColor(index);
-                point.raycastTarget = false;
-                points.Add(point);
+            Image point = pointObject.AddComponent<Image>();
+            point.color = RestingColor(index);
+            point.raycastTarget = false;
+            points.Add(point);
 
-                AddPointLabel(pointObject.transform, index);
-            }
+            AddPointLabel(pointObject.transform, index);
         }
     }
 
@@ -388,39 +613,195 @@ public sealed class CombatGestureGrid :
         label.alignment = TextAnchor.MiddleCenter;
         label.fontStyle = FontStyle.Bold;
         label.fontSize = 24;
-        label.color = new Color(1f, 1f, 1f, 0.88f);
+        label.color =
+            new Color(1f, 1f, 1f, 0.88f);
         label.raycastTarget = false;
         label.text = ((char)('A' + index)).ToString();
     }
 
-    private void TrackPointer(
-        Vector2 screenPosition,
-        Camera eventCamera)
+    private void UpdateRibbon()
     {
-        if (!TryGetPointerLocalPosition(
-                screenPosition,
-                eventCamera,
-                out Vector2 localPosition))
+        if (ribbon == null)
+            return;
+
+        if (!traceEnabled ||
+            !hasPointerLocalPosition ||
+            traceLocalSamples.Count == 0)
+        {
+            ribbon.ClearPath();
+            return;
+        }
+
+        Color traceColor = ZoneColor(startingZone);
+        traceColor.a = traceAlpha;
+        ribbon.SetPath(
+            traceLocalSamples,
+            currentPointerLocalPosition,
+            traceLineWidth,
+            traceColor,
+            traceRoundSegments
+        );
+    }
+
+    private void PresentRecognition(
+        GestureRecognitionResult recognitionResult)
+    {
+        Color color = recognitionResult.Zones.Count > 0
+            ? ZoneColor(recognitionResult.Zones[0])
+            : Color.white;
+
+        switch (recognitionResult.Status)
+        {
+            case GestureRecognitionStatus.Recognized:
+                RoutedGestureAction action =
+                    commandRouter.ExecuteStroke(
+                        recognitionResult
+                    );
+                PresentAction(action);
+                StartRecognitionFeedback(
+                    recognitionResult.Zones,
+                    color
+                );
+                break;
+
+            case GestureRecognitionStatus.Ambiguous:
+                ShowFeedback(
+                    "Geste ambigu",
+                    Color.white,
+                    1f
+                );
+                break;
+
+            default:
+                ShowFeedback(
+                    "Geste invalide",
+                    Color.white,
+                    1f
+                );
+                break;
+        }
+    }
+
+    private void PresentAction(RoutedGestureAction action)
+    {
+        Color color = ZoneColor(action.CategoryZone);
+
+        if (!action.IsMapped ||
+            !action.HasCombatResult)
+        {
+            ShowFeedback(
+                action.Label,
+                color,
+                1f
+            );
+            return;
+        }
+
+        ShowActionResult(
+            action.CombatResult,
+            action.Label,
+            color
+        );
+    }
+
+    private void StartRecognitionFeedback(
+        IReadOnlyList<int> zones,
+        Color color)
+    {
+        if (!recognitionFeedbackEnabled ||
+            zones == null ||
+            zones.Count == 0)
         {
             return;
         }
 
-        currentPointerLocalPosition = localPosition;
+        CancelRecognitionFeedback();
+        recognitionFeedbackRoutine = StartCoroutine(
+            RecognitionFeedbackRoutine(zones, color)
+        );
+    }
 
-        if (!hasPointerLocalPosition)
+    private IEnumerator RecognitionFeedbackRoutine(
+        IReadOnlyList<int> zones,
+        Color color)
+    {
+        for (int index = 0; index < zones.Count; index++)
         {
-            previousPointerLocalPosition = localPosition;
-            hasPointerLocalPosition = true;
+            int zone = zones[index];
+            if (zone < 0 || zone >= points.Count)
+                continue;
+
+            Color highlighted = color;
+            highlighted.a = 1f;
+            points[zone].color = highlighted;
+            points[zone].rectTransform.localScale =
+                Vector3.one * 1.12f;
         }
 
-        SelectPointsAlongPointerSegment(
-            previousPointerLocalPosition,
-            currentPointerLocalPosition
-        );
+        float elapsed = 0f;
+        while (elapsed < recognitionFeedbackDuration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            yield return null;
+        }
 
-        previousPointerLocalPosition =
-            currentPointerLocalPosition;
-        UpdateTraceVisual();
+        recognitionFeedbackRoutine = null;
+        ResetPointVisuals();
+    }
+
+    private void CancelRecognitionFeedback()
+    {
+        if (recognitionFeedbackRoutine != null)
+        {
+            StopCoroutine(recognitionFeedbackRoutine);
+            recognitionFeedbackRoutine = null;
+        }
+
+        ResetPointVisuals();
+    }
+
+    private void CancelPointerAction()
+    {
+        if (holdStarted &&
+            commandRouter != null &&
+            activeHoldZone >= 0)
+        {
+            commandRouter.EndHold(activeHoldZone);
+        }
+
+        ResetPointerState();
+    }
+
+    private void ResetPointerState()
+    {
+        activePointerId = int.MinValue;
+        activeEventCamera = null;
+        activePointerDevice = null;
+        startingZone = -1;
+        activeHoldZone = -1;
+        pointerDownTime = 0f;
+        lastMeaningfulMovementTime = 0f;
+        maximumDisplacementSquared = 0f;
+        holdAttempted = false;
+        holdStarted = false;
+        strokeFollowedByHold = false;
+        hasPointerLocalPosition = false;
+        startingNormalizedPosition = Vector2.zero;
+        lastMovementAnchorNormalized = Vector2.zero;
+        currentNormalizedPosition = Vector2.zero;
+        currentPointerLocalPosition = Vector2.zero;
+        ClearRecordedGesture();
+
+        if (ribbon != null)
+            ribbon.ClearPath();
+
+        ResetPointVisuals();
+    }
+
+    private void ClearRecordedGesture()
+    {
+        traceLocalSamples.Clear();
+        normalizedSamples.Clear();
     }
 
     private bool TryGetPointerLocalPosition(
@@ -436,466 +817,71 @@ public sealed class CombatGestureGrid :
         );
     }
 
-    private void SelectPointsAlongPointerSegment(
-        Vector2 from,
-        Vector2 to)
+    private Vector2 LocalToNormalized(Vector2 localPosition)
     {
-        float minimumProgress = 0f;
-
-        if (gesture.Count == 0)
-        {
-            if (!TryFindInitialPoint(
-                    from,
-                    to,
-                    out int initialPoint,
-                    out minimumProgress))
-            {
-                return;
-            }
-
-            SelectPoint(initialPoint);
-        }
-
-        CollectDraggedPointCandidates(
-            from,
-            to,
-            minimumProgress
-        );
-
-        pointCandidates.Sort(
-            static (left, right) =>
-            {
-                int progressComparison =
-                    left.Progress.CompareTo(right.Progress);
-                return progressComparison != 0
-                    ? progressComparison
-                    : left.DistanceSquared.CompareTo(
-                        right.DistanceSquared
-                    );
-            }
-        );
-
-        for (int index = 0;
-             index < pointCandidates.Count;
-             index++)
-        {
-            SelectPoint(pointCandidates[index].Index);
-        }
-    }
-
-    private bool TryFindInitialPoint(
-        Vector2 from,
-        Vector2 to,
-        out int selectedPoint,
-        out float selectedProgress)
-    {
-        selectedPoint = -1;
-        selectedProgress = float.PositiveInfinity;
-        float selectedDistanceSquared = float.PositiveInfinity;
-        float radiusSquared =
-            initialPointDetectionRadius *
-            initialPointDetectionRadius;
-
-        for (int index = 0; index < points.Count; index++)
-        {
-            float distanceSquared = DistanceSquaredToSegment(
-                GetPointLocalPosition(index),
-                from,
-                to,
-                out float progress
-            );
-
-            if (distanceSquared > radiusSquared ||
-                progress > selectedProgress ||
-                (Mathf.Approximately(
-                     progress,
-                     selectedProgress) &&
-                 distanceSquared >= selectedDistanceSquared))
-            {
-                continue;
-            }
-
-            selectedPoint = index;
-            selectedProgress = progress;
-            selectedDistanceSquared = distanceSquared;
-        }
-
-        if (selectedPoint >= 0)
-            return true;
-
-        selectedProgress = 0f;
-        return false;
-    }
-
-    private void CollectDraggedPointCandidates(
-        Vector2 from,
-        Vector2 to,
-        float minimumProgress)
-    {
-        pointCandidates.Clear();
-        float radiusSquared =
-            draggedPointDetectionRadius *
-            draggedPointDetectionRadius;
-
-        for (int index = 0; index < points.Count; index++)
-        {
-            if (gesture.Contains(index))
-                continue;
-
-            float distanceSquared = DistanceSquaredToSegment(
-                GetPointLocalPosition(index),
-                from,
-                to,
-                out float progress
-            );
-
-            if (progress + Mathf.Epsilon < minimumProgress ||
-                distanceSquared > radiusSquared)
-            {
-                continue;
-            }
-
-            pointCandidates.Add(
-                new PointCandidate(
-                    index,
-                    progress,
-                    distanceSquared
-                )
-            );
-        }
-    }
-
-    private void SelectPoint(int targetIndex)
-    {
-        if (targetIndex < 0 ||
-            targetIndex >= points.Count ||
-            gesture.Contains(targetIndex))
-        {
-            return;
-        }
-
-        if (gesture.Count > 0)
-        {
-            AddIntermediatePoints(
-                gesture[^1],
-                targetIndex
-            );
-        }
-
-        AppendPoint(targetIndex);
-    }
-
-    private void AddIntermediatePoints(
-        int fromIndex,
-        int toIndex)
-    {
-        int fromX = fromIndex % GridSize;
-        int fromY = fromIndex / GridSize;
-        int toX = toIndex % GridSize;
-        int toY = toIndex / GridSize;
-        int differenceX = toX - fromX;
-        int differenceY = toY - fromY;
-        int stepCount = GreatestCommonDivisor(
-            Mathf.Abs(differenceX),
-            Mathf.Abs(differenceY)
-        );
-
-        if (stepCount <= 1)
-            return;
-
-        int stepX = differenceX / stepCount;
-        int stepY = differenceY / stepCount;
-
-        for (int step = 1; step < stepCount; step++)
-        {
-            int intermediateX = fromX + stepX * step;
-            int intermediateY = fromY + stepY * step;
-            AppendPoint(
-                intermediateY * GridSize + intermediateX
-            );
-        }
-    }
-
-    private void AppendPoint(int pointIndex)
-    {
-        if (gesture.Contains(pointIndex))
-            return;
-
-        gesture.Add(pointIndex);
-        HighlightPoint(pointIndex, 1f);
-        ShowFeedback(
-            FormatGesture(),
-            points[gesture[0]].color,
-            0.7f
-        );
-        UpdateTraceVisual();
-    }
-
-    private static int GreatestCommonDivisor(
-        int left,
-        int right)
-    {
-        while (right != 0)
-        {
-            int remainder = left % right;
-            left = right;
-            right = remainder;
-        }
-
-        return left;
-    }
-
-    private Vector2 GetPointLocalPosition(int pointIndex)
-    {
-        RectTransform gridRect = (RectTransform)transform;
-        return gridRect.InverseTransformPoint(
-            points[pointIndex].rectTransform.position
+        Rect rect = ((RectTransform)transform).rect;
+        return new Vector2(
+            Mathf.InverseLerp(
+                rect.xMin,
+                rect.xMax,
+                localPosition.x
+            ),
+            Mathf.InverseLerp(
+                rect.yMin,
+                rect.yMax,
+                localPosition.y
+            )
         );
     }
 
-    private static float DistanceSquaredToSegment(
-        Vector2 point,
-        Vector2 from,
-        Vector2 to,
-        out float progress)
+    private Vector2 NormalizedToLocal(
+        Vector2 normalizedPosition)
     {
-        Vector2 segment = to - from;
-        float squaredLength = segment.sqrMagnitude;
-
-        if (squaredLength <= Mathf.Epsilon)
-        {
-            progress = 0f;
-            return (point - from).sqrMagnitude;
-        }
-
-        progress = Mathf.Clamp01(
-            Vector2.Dot(point - from, segment) /
-            squaredLength
+        Rect rect = ((RectTransform)transform).rect;
+        return new Vector2(
+            Mathf.Lerp(
+                rect.xMin,
+                rect.xMax,
+                normalizedPosition.x
+            ),
+            Mathf.Lerp(
+                rect.yMin,
+                rect.yMax,
+                normalizedPosition.y
+            )
         );
-        Vector2 closestPoint = from + segment * progress;
-        return (point - closestPoint).sqrMagnitude;
-    }
-
-    private void UpdateTraceVisual()
-    {
-        if (!traceEnabled ||
-            gesture.Count == 0 ||
-            !hasPointerLocalPosition)
-        {
-            HideTraceSegments();
-            return;
-        }
-
-        Color traceColor = points[gesture[0]].color;
-        traceColor.a = traceAlpha;
-        int segmentIndex = 0;
-
-        for (int index = 1;
-             index < gesture.Count;
-             index++)
-        {
-            ConfigureTraceSegment(
-                segmentIndex++,
-                GetPointLocalPosition(gesture[index - 1]),
-                GetPointLocalPosition(gesture[index]),
-                traceColor
-            );
-        }
-
-        ConfigureTraceSegment(
-            segmentIndex++,
-            GetPointLocalPosition(gesture[^1]),
-            currentPointerLocalPosition,
-            traceColor
-        );
-
-        for (int index = segmentIndex;
-             index < segments.Count;
-             index++)
-        {
-            segments[index].gameObject.SetActive(false);
-        }
-    }
-
-    private void ConfigureTraceSegment(
-        int segmentIndex,
-        Vector2 from,
-        Vector2 to,
-        Color color)
-    {
-        if (segmentIndex < 0 ||
-            segmentIndex >= segments.Count)
-        {
-            return;
-        }
-
-        Image segment = segments[segmentIndex];
-        RectTransform segmentRect = segment.rectTransform;
-        Vector2 direction = to - from;
-
-        segment.color = color;
-        segmentRect.localPosition = (from + to) * 0.5f;
-        segmentRect.sizeDelta = new Vector2(
-            direction.magnitude,
-            traceLineWidth
-        );
-        segmentRect.localRotation = Quaternion.Euler(
-            0f,
-            0f,
-            Mathf.Atan2(direction.y, direction.x) *
-            Mathf.Rad2Deg
-        );
-        segment.gameObject.SetActive(true);
-    }
-
-    private void HideTraceSegments()
-    {
-        for (int index = 0; index < segments.Count; index++)
-            segments[index].gameObject.SetActive(false);
-    }
-
-    private void ExecuteGesture()
-    {
-        if (gesture.Count == 0)
-            return;
-
-        if (gesture.Count == 1)
-        {
-            ExecuteTap(gesture[0]);
-            return;
-        }
-
-        if (Matches(6, 7, 8))
-        {
-            ShowActionResult(
-                fighter.DodgeRight(),
-                "Esquive droite",
-                MovementColor
-            );
-        }
-        else if (Matches(8, 7, 6))
-        {
-            ShowActionResult(
-                fighter.DodgeLeft(),
-                "Esquive gauche",
-                MovementColor
-            );
-        }
-        else
-        {
-            ShowFeedback(
-                "Commande inconnue",
-                Color.white,
-                1f
-            );
-        }
-    }
-
-    private void ExecuteTap(int point)
-    {
-        if (point is >= 0 and <= 2)
-        {
-            ShowActionResult(
-                fighter.LightAttack(),
-                "Attaque legere",
-                AttackColor
-            );
-        }
-        else if (point is >= 3 and <= 5)
-        {
-            ShowActionResult(
-                fighter.StartDefense(),
-                "Defense simple",
-                DefenseColor
-            );
-        }
-        else
-        {
-            ShowFeedback(
-                "Commande inconnue",
-                Color.white,
-                1f
-            );
-        }
-    }
-
-    private bool Matches(params int[] expected)
-    {
-        if (gesture.Count != expected.Length)
-            return false;
-
-        for (int index = 0; index < expected.Length; index++)
-        {
-            if (gesture[index] != expected[index])
-                return false;
-        }
-
-        return true;
-    }
-
-    private void CancelPointerAction()
-    {
-        if (heldGuardStarted && fighter != null)
-            fighter.StopHeldGuard();
-
-        if (chargeStarted && fighter != null)
-            fighter.StopChargeInput();
-
-        ResetPointerState();
-    }
-
-    private void ResetPointerState()
-    {
-        activePointerId = int.MinValue;
-        activeEventCamera = null;
-        activePointerDevice = null;
-        heldGuardStarted = false;
-        chargeStarted = false;
-        hasPointerLocalPosition = false;
-        previousPointerLocalPosition = Vector2.zero;
-        currentPointerLocalPosition = Vector2.zero;
-        ClearGesture();
-    }
-
-    private void ClearGesture()
-    {
-        gesture.Clear();
-        pointCandidates.Clear();
-        HideTraceSegments();
-
-        for (int index = 0; index < points.Count; index++)
-        {
-            points[index].color = RestingColor(index);
-            points[index].rectTransform.localScale =
-                Vector3.one;
-        }
     }
 
     private void HighlightPoint(int index, float alpha)
     {
-        Color color = RowColor(index);
+        if (index < 0 || index >= points.Count)
+            return;
+
+        Color color = ZoneColor(index);
         color.a = alpha;
         points[index].color = color;
     }
 
     private void PulsePoint(int index)
     {
+        if (index < 0 || index >= points.Count)
+            return;
+
         float pulse =
-            1f + Mathf.Sin(Time.unscaledTime * 8f) * 0.07f;
+            1f +
+            Mathf.Sin(Time.unscaledTime * 8f) * 0.07f;
         points[index].rectTransform.localScale =
             Vector3.one * pulse;
     }
 
-    private string FormatGesture()
+    private void ResetPointVisuals()
     {
-        if (gesture.Count == 0)
-            return string.Empty;
-
-        char[] labels = new char[gesture.Count];
-        for (int index = 0; index < gesture.Count; index++)
-            labels[index] = (char)('A' + gesture[index]);
-
-        return string.Join(" -> ", labels);
+        for (int index = 0; index < points.Count; index++)
+        {
+            points[index].color = RestingColor(index);
+            points[index].rectTransform.localScale =
+                Vector3.one;
+        }
     }
 
     private void ShowFeedback(
@@ -947,36 +933,21 @@ public sealed class CombatGestureGrid :
         }
     }
 
-    private readonly struct PointCandidate
+    private Color RestingColor(int index)
     {
-        public int Index { get; }
-        public float Progress { get; }
-        public float DistanceSquared { get; }
-
-        public PointCandidate(
-            int index,
-            float progress,
-            float distanceSquared)
-        {
-            Index = index;
-            Progress = progress;
-            DistanceSquared = distanceSquared;
-        }
-    }
-
-    private static Color RestingColor(int index)
-    {
-        Color color = RowColor(index);
+        Color color = ZoneColor(index);
         color.a = 0.24f;
         return color;
     }
 
-    private static Color RowColor(int index)
+    private Color ZoneColor(int index)
     {
-        if (index <= 2)
-            return AttackColor;
-        if (index <= 5)
-            return DefenseColor;
-        return MovementColor;
+        if (index is >= 0 and <= 2)
+            return attackColor;
+        if (index is >= 3 and <= 5)
+            return defenseColor;
+        if (index is >= 6 and <= 8)
+            return movementColor;
+        return Color.white;
     }
 }
