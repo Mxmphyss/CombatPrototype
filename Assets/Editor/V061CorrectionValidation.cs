@@ -376,8 +376,13 @@ public static class V061CorrectionValidation
             camera.fieldOfView <= 72f,
             "Camera zoom escaped its configured limits."
         );
-        Quaternion stableRotation = camera.transform.rotation;
+        Quaternion initialRotation = camera.transform.rotation;
         RequirePairVisible(camera, context, "MidRange");
+        RequireCameraBehindPlayer(
+            camera,
+            context,
+            "MidRange"
+        );
 
         CommitDodge(
             context,
@@ -401,6 +406,33 @@ public static class V061CorrectionValidation
         RequirePairVisible(camera, context, "LongRange");
 
         context.Controller.ResetDuel();
+        CommitDodge(
+            context,
+            DodgeDirection.Left,
+            DistanceLevel.MidRange
+        );
+        Require(
+            context.Controller.CurrentOrientation ==
+                RelativeOrientation.LeftFlank,
+            "Lateral dodge did not reach the left flank."
+        );
+        controller.ResetCameraView(true);
+        RequirePairVisible(camera, context, "left flank");
+        RequireCameraBehindPlayer(
+            camera,
+            context,
+            "left flank"
+        );
+        Require(
+            Quaternion.Angle(
+                initialRotation,
+                camera.transform.rotation
+            ) >= 1f,
+            "Camera did not follow the player to the left flank."
+        );
+
+        context.Controller.ResetDuel();
+        controller.ResetCameraView(true);
         Vector3 stationaryOpponentPosition =
             context.SecondCombat.transform.position;
         Require(
@@ -450,10 +482,15 @@ public static class V061CorrectionValidation
         );
         Require(
             Quaternion.Angle(
-                stableRotation,
+                initialRotation,
                 camera.transform.rotation
-            ) <= 0.001f,
-            "Automatic framing rotated the map."
+            ) >= 1f,
+            "Camera did not rotate with the player during strafe."
+        );
+        RequireCameraBehindPlayer(
+            camera,
+            context,
+            "prolonged strafe"
         );
         context.Controller.StopAllMovement();
         context.Controller.ResetDuel();
@@ -474,6 +511,36 @@ public static class V061CorrectionValidation
             camera,
             context.SecondCombat.transform.position,
             $"Opponent is outside the frame at {situation}."
+        );
+    }
+
+    private static void RequireCameraBehindPlayer(
+        Camera camera,
+        ValidationContext context,
+        string situation)
+    {
+        Vector3 duelForward = Vector3.ProjectOnPlane(
+            context.SecondCombat.transform.position -
+            context.FirstCombat.transform.position,
+            Vector3.up
+        ).normalized;
+        Vector3 cameraForward = Vector3.ProjectOnPlane(
+            camera.transform.forward,
+            Vector3.up
+        ).normalized;
+        Vector3 playerToCamera = Vector3.ProjectOnPlane(
+            camera.transform.position -
+            context.FirstCombat.transform.position,
+            Vector3.up
+        ).normalized;
+
+        Require(
+            Vector3.Dot(cameraForward, duelForward) >= 0.995f,
+            $"Camera does not face the opponent at {situation}."
+        );
+        Require(
+            Vector3.Dot(playerToCamera, duelForward) <= -0.5f,
+            $"Camera is not behind the player at {situation}."
         );
     }
 

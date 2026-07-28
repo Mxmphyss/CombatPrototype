@@ -208,9 +208,10 @@ public static class V061PlayModeValidation
             Quaternion.Angle(
                 stableCameraRotation,
                 Camera.main.transform.rotation
-            ) <= 0.01f,
-            "Runtime camera rotated the map during strafe."
+            ) >= 0.1f,
+            "Runtime camera did not rotate with the player."
         );
+        RequireCameraBehindPlayer("runtime strafe");
         cameraController.ResetCameraView(true);
         RequirePairVisible("runtime strafe");
 
@@ -289,6 +290,34 @@ public static class V061PlayModeValidation
         RequireVisible(
             opponent.transform.position,
             $"Opponent is outside the camera at {situation}."
+        );
+    }
+
+    private static void RequireCameraBehindPlayer(
+        string situation)
+    {
+        Vector3 duelForward = Vector3.ProjectOnPlane(
+            opponent.transform.position -
+            player.transform.position,
+            Vector3.up
+        ).normalized;
+        Vector3 cameraForward = Vector3.ProjectOnPlane(
+            Camera.main.transform.forward,
+            Vector3.up
+        ).normalized;
+        Vector3 playerToCamera = Vector3.ProjectOnPlane(
+            Camera.main.transform.position -
+            player.transform.position,
+            Vector3.up
+        ).normalized;
+
+        Require(
+            Vector3.Dot(cameraForward, duelForward) >= 0.99f,
+            $"Camera does not face the opponent at {situation}."
+        );
+        Require(
+            Vector3.Dot(playerToCamera, duelForward) <= -0.4f,
+            $"Camera is not behind the player at {situation}."
         );
     }
 

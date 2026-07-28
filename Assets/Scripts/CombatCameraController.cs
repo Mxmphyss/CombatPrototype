@@ -34,7 +34,7 @@ public sealed class CombatCameraController : MonoBehaviour
     private Camera combatCamera;
     private FighterCombat player;
     private FighterCombat opponent;
-    private Quaternion neutralRotation;
+    private Quaternion neutralCameraLocalRotation;
     private Vector3 neutralPlayerOffset;
     private Vector3 manualPanOffset;
     private Vector3 shakeOffset;
@@ -74,10 +74,17 @@ public sealed class CombatCameraController : MonoBehaviour
             return;
         }
 
-        neutralRotation = combatCamera.transform.rotation;
+        Quaternion initialDuelRotation =
+            CalculateDuelFrameRotation();
+        neutralCameraLocalRotation =
+            Quaternion.Inverse(initialDuelRotation) *
+            combatCamera.transform.rotation;
         neutralPlayerOffset =
-            combatCamera.transform.position -
-            player.transform.position;
+            Quaternion.Inverse(initialDuelRotation) *
+            (
+                combatCamera.transform.position -
+                player.transform.position
+            );
         neutralZoom = combatCamera.orthographic
             ? combatCamera.orthographicSize
             : combatCamera.fieldOfView;
@@ -225,6 +232,7 @@ public sealed class CombatCameraController : MonoBehaviour
     private void UpdateAutomaticFraming(float deltaTime)
     {
         Vector3 targetPosition = CalculateTargetPosition();
+        Quaternion targetRotation = CalculateTargetRotation();
         combatCamera.transform.position = Vector3.SmoothDamp(
             combatCamera.transform.position,
             targetPosition + shakeOffset,
@@ -233,9 +241,12 @@ public sealed class CombatCameraController : MonoBehaviour
             Mathf.Infinity,
             Mathf.Max(0.0001f, deltaTime)
         );
-        combatCamera.transform.rotation = neutralRotation;
+        combatCamera.transform.rotation = targetRotation;
 
-        float targetZoom = CalculateTargetZoom(targetPosition);
+        float targetZoom = CalculateTargetZoom(
+            targetPosition,
+            targetRotation
+        );
         if (combatCamera.orthographic)
         {
             combatCamera.orthographicSize = Mathf.SmoothDamp(
@@ -263,11 +274,15 @@ public sealed class CombatCameraController : MonoBehaviour
     private void ApplyAutomaticFramingImmediate()
     {
         Vector3 targetPosition = CalculateTargetPosition();
+        Quaternion targetRotation = CalculateTargetRotation();
         combatCamera.transform.SetPositionAndRotation(
             targetPosition,
-            neutralRotation
+            targetRotation
         );
-        float targetZoom = CalculateTargetZoom(targetPosition);
+        float targetZoom = CalculateTargetZoom(
+            targetPosition,
+            targetRotation
+        );
         if (combatCamera.orthographic)
             combatCamera.orthographicSize = targetZoom;
         else
@@ -280,6 +295,7 @@ public sealed class CombatCameraController : MonoBehaviour
         if (opponent == null)
         {
             return playerPosition +
+                CalculateDuelFrameRotation() *
                 neutralPlayerOffset +
                 manualPanOffset;
         }
@@ -301,8 +317,12 @@ public sealed class CombatCameraController : MonoBehaviour
             maximumOpponentFramingBias
         );
         float safeStep = Mathf.Max(0.01f, framingBiasStep);
+        Quaternion targetRotation = CalculateTargetRotation();
         while (bias + 0.0001f < maximumBias &&
-               RequiredAutomaticZoom(automaticPosition) >
+               RequiredAutomaticZoom(
+                   automaticPosition,
+                   targetRotation
+               ) >
                    maximumZoom)
         {
             bias = Mathf.Min(maximumBias, bias + safeStep);
@@ -325,23 +345,36 @@ public sealed class CombatCameraController : MonoBehaviour
             playerPosition,
             opponentPosition,
             bias
-        ) + neutralPlayerOffset;
+        ) + CalculateDuelFrameRotation() * neutralPlayerOffset;
     }
 
-    private float RequiredAutomaticZoom(Vector3 cameraPosition)
+    private float RequiredAutomaticZoom(
+        Vector3 cameraPosition,
+        Quaternion cameraRotation)
     {
         return combatCamera.orthographic
-            ? CalculateRequiredOrthographicSize(cameraPosition)
-            : CalculateRequiredPerspectiveFov(cameraPosition);
+            ? CalculateRequiredOrthographicSize(
+                cameraPosition,
+                cameraRotation
+            )
+            : CalculateRequiredPerspectiveFov(
+                cameraPosition,
+                cameraRotation
+            );
     }
 
-    private float CalculateTargetZoom(Vector3 cameraPosition)
+    private float CalculateTargetZoom(
+        Vector3 cameraPosition,
+        Quaternion cameraRotation)
     {
         float automaticZoom = neutralZoom;
         if (opponent != null)
         {
             automaticZoom =
-                RequiredAutomaticZoom(cameraPosition);
+                RequiredAutomaticZoom(
+                    cameraPosition,
+                    cameraRotation
+                );
             automaticZoom = Mathf.Max(neutralZoom, automaticZoom);
         }
 
@@ -353,9 +386,11 @@ public sealed class CombatCameraController : MonoBehaviour
     }
 
     private float CalculateRequiredPerspectiveFov(
-        Vector3 cameraPosition)
+        Vector3 cameraPosition,
+        Quaternion cameraRotation)
     {
-        Quaternion inverseRotation = Quaternion.Inverse(neutralRotation);
+        Quaternion inverseRotation =
+            Quaternion.Inverse(cameraRotation);
         float playerFov = RequiredVerticalFov(
             inverseRotation *
             (GetNeutralPosition(player) - cameraPosition)
@@ -388,9 +423,11 @@ public sealed class CombatCameraController : MonoBehaviour
     }
 
     private float CalculateRequiredOrthographicSize(
-        Vector3 cameraPosition)
+        Vector3 cameraPosition,
+        Quaternion cameraRotation)
     {
-        Quaternion inverseRotation = Quaternion.Inverse(neutralRotation);
+        Quaternion inverseRotation =
+            Quaternion.Inverse(cameraRotation);
         Vector3 playerLocal =
             inverseRotation *
             (GetNeutralPosition(player) - cameraPosition);
@@ -415,6 +452,36 @@ public sealed class CombatCameraController : MonoBehaviour
         return fighter != null
             ? fighter.transform.position
             : Vector3.zero;
+    }
+
+    private Quaternion CalculateTargetRotation()
+    {
+        return CalculateDuelFrameRotation() *
+            neutralCameraLocalRotation;
+    }
+
+    private Quaternion CalculateDuelFrameRotation()
+    {
+        Vector3 duelDirection =
+            opponent != null
+                ? Horizontal(
+                    opponent.transform.position -
+                    player.transform.position
+                )
+                : Horizontal(player.transform.forward);
+        if (duelDirection.sqrMagnitude <= 0.000001f)
+            duelDirection = Vector3.forward;
+
+        return Quaternion.LookRotation(
+            duelDirection.normalized,
+            Vector3.up
+        );
+    }
+
+    private static Vector3 Horizontal(Vector3 value)
+    {
+        value.y = 0f;
+        return value;
     }
 
     private void SetMultiTouchActive(bool active)
