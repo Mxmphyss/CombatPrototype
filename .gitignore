@@ -64,6 +64,12 @@ sysinfo.txt
 *.unitypackage.meta
 *.app
 
+# Local WebGL publishing output
+/WebGL Builds/
+/connectweb*.zip
+/webgl_sharing
+/ProjectSettings/Packages/com.unity.connect.share/
+
 # Crashlytics generated file
 crashlytics-build.properties
 
