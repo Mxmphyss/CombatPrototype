@@ -7,7 +7,11 @@ public sealed class CombatRulesConfig : ScriptableObject
 {
     [Header("Garde maintenue")]
     [Min(0f)]
-    [SerializeField] private float guardStaminaDamage = 5f;
+    [SerializeField] private float guardStaminaDamage = 15f;
+
+    [Header("Parade et riposte")]
+    [Min(0f)]
+    [SerializeField] private float riposteWindowDuration = 0.5f;
 
     [Header("Garde brisee")]
     [Min(0.01f)]
@@ -39,6 +43,8 @@ public sealed class CombatRulesConfig : ScriptableObject
 
     public float GuardStaminaDamage =>
         Mathf.Max(0f, guardStaminaDamage);
+    public float RiposteWindowDuration =>
+        Mathf.Max(0f, riposteWindowDuration);
     public float GuardBreakStunDuration =>
         Mathf.Max(0.01f, guardBreakStunDuration);
     public float StunRecoveryStamina =>
@@ -109,6 +115,8 @@ public sealed class CombatRulesConfig : ScriptableObject
     {
         guardStaminaDamage =
             Mathf.Max(0f, guardStaminaDamage);
+        riposteWindowDuration =
+            Mathf.Max(0f, riposteWindowDuration);
         guardBreakStunDuration =
             Mathf.Max(0.01f, guardBreakStunDuration);
         stunRecoveryStamina =

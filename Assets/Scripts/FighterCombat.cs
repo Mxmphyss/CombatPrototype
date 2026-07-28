@@ -104,8 +104,6 @@ public class FighterCombat : MonoBehaviour
     [Min(0f)]
     [SerializeField] private float attackRecoveryDuration = 0.5f;
     [Min(0f)]
-    [SerializeField] private float perfectGuardStunDuration = 0.22f;
-    [Min(0f)]
     [SerializeField] private float perfectDodgeStunDuration = 0.32f;
 
     [Header("Charge")]
@@ -173,14 +171,24 @@ public class FighterCombat : MonoBehaviour
         private set;
     }
     public float StunRemaining { get; private set; }
+    public bool IsRiposteWindowActive =>
+        combatEnabled &&
+        !IsDead &&
+        Time.time < riposteWindowEndsAt;
+    public float RiposteWindowRemaining =>
+        IsRiposteWindowActive
+            ? Mathf.Max(0f, riposteWindowEndsAt - Time.time)
+            : 0f;
 
     private bool combatEnabled = true;
     private bool heldGuardActive;
     private float chargeHoldTime;
     private float defenseStartedAt = float.NegativeInfinity;
     private float dodgeStartedAt = float.NegativeInfinity;
+    private float riposteWindowEndsAt = float.NegativeInfinity;
     private Vector3 initialPosition;
     private Quaternion initialRotation;
+    private Coroutine simpleDefenseRoutine;
 
     private void Awake()
     {
@@ -232,6 +240,7 @@ public class FighterCombat : MonoBehaviour
         if (!fighterStats.SpendStamina(lightAttackStaminaCost))
             return CombatActionResult.NotEnoughStamina;
 
+        ClearRiposteWindow();
         float startup = startupDurationOverride >= 0f
             ? startupDurationOverride
             : attackStartupDuration;
@@ -251,9 +260,11 @@ public class FighterCombat : MonoBehaviour
         if (!fighterStats.SpendStamina(defenseStaminaCost))
             return CombatActionResult.NotEnoughStamina;
 
+        ClearRiposteWindow();
         heldGuardActive = false;
         defenseStartedAt = Time.time;
-        StartCoroutine(DefenseRoutine());
+        simpleDefenseRoutine =
+            StartCoroutine(DefenseRoutine());
         return CombatActionResult.Started;
     }
 
@@ -265,6 +276,7 @@ public class FighterCombat : MonoBehaviour
         if (CurrentState != FighterCombatState.Idle)
             return CombatActionResult.Busy;
 
+        ClearRiposteWindow();
         heldGuardActive = true;
         defenseStartedAt = Time.time;
         SetState(FighterCombatState.Defending);
@@ -292,6 +304,7 @@ public class FighterCombat : MonoBehaviour
         if (CurrentState != FighterCombatState.Idle)
             return CombatActionResult.Busy;
 
+        ClearRiposteWindow();
         chargeHoldTime = 0f;
         SetState(FighterCombatState.Charging);
         return CombatActionResult.Started;
@@ -332,6 +345,7 @@ public class FighterCombat : MonoBehaviour
     public void ResetCombatState()
     {
         StopAllCoroutines();
+        simpleDefenseRoutine = null;
         combatEnabled = true;
         heldGuardActive = false;
         chargeHoldTime = 0f;
@@ -339,6 +353,7 @@ public class FighterCombat : MonoBehaviour
         StunRemaining = 0f;
         defenseStartedAt = float.NegativeInfinity;
         dodgeStartedAt = float.NegativeInfinity;
+        ClearRiposteWindow();
         transform.SetPositionAndRotation(
             initialPosition,
             initialRotation
@@ -349,10 +364,14 @@ public class FighterCombat : MonoBehaviour
     public void CancelActiveActions(bool restoreNeutralTransform)
     {
         StopAllCoroutines();
+        simpleDefenseRoutine = null;
         heldGuardActive = false;
         chargeHoldTime = 0f;
         CurrentStunReason = FighterStunReason.None;
         StunRemaining = 0f;
+        defenseStartedAt = float.NegativeInfinity;
+        dodgeStartedAt = float.NegativeInfinity;
+        ClearRiposteWindow();
 
         if (restoreNeutralTransform)
         {
@@ -425,8 +444,6 @@ public class FighterCombat : MonoBehaviour
 
         float stunDuration = hitResult switch
         {
-            CombatHitResult.PerfectGuard =>
-                perfectGuardStunDuration,
             CombatHitResult.PerfectDodge =>
                 perfectDodgeStunDuration,
             _ => 0f
@@ -494,6 +511,7 @@ public class FighterCombat : MonoBehaviour
 
             if (isPerfect)
             {
+                CompletePerfectGuard();
                 fighterStats.RecoverStamina(
                     defenseStaminaCost *
                     perfectGuardRefundRatio
@@ -549,11 +567,32 @@ public class FighterCombat : MonoBehaviour
         SetState(FighterCombatState.Defending);
         yield return new WaitForSeconds(defenseDuration);
 
+        simpleDefenseRoutine = null;
         if (!heldGuardActive &&
             CurrentState == FighterCombatState.Defending)
         {
             SetState(FighterCombatState.Idle);
         }
+    }
+
+    private void CompletePerfectGuard()
+    {
+        if (simpleDefenseRoutine != null)
+        {
+            StopCoroutine(simpleDefenseRoutine);
+            simpleDefenseRoutine = null;
+        }
+
+        heldGuardActive = false;
+        defenseStartedAt = float.NegativeInfinity;
+        riposteWindowEndsAt =
+            Time.time + Rules.RiposteWindowDuration;
+        SetState(FighterCombatState.Idle);
+    }
+
+    private void ClearRiposteWindow()
+    {
+        riposteWindowEndsAt = float.NegativeInfinity;
     }
 
     private void BeginGuardBreakStun()
@@ -566,10 +605,12 @@ public class FighterCombat : MonoBehaviour
         }
 
         StopAllCoroutines();
+        simpleDefenseRoutine = null;
         heldGuardActive = false;
         chargeHoldTime = 0f;
         defenseStartedAt = float.NegativeInfinity;
         dodgeStartedAt = float.NegativeInfinity;
+        ClearRiposteWindow();
         fighterStats.SetStamina(0f);
 
         CurrentStunReason =
@@ -664,6 +705,7 @@ public class FighterCombat : MonoBehaviour
         if (!fighterStats.SpendStamina(dodgeStaminaCost))
             return CombatActionResult.NotEnoughStamina;
 
+        ClearRiposteWindow();
         dodgeStartedAt = Time.time;
         StartCoroutine(DodgeRoutine(direction));
         return CombatActionResult.Started;

@@ -22,6 +22,7 @@ public readonly struct GestureDebugEventData
     public bool HasCombatResult { get; }
     public CombatActionResult CombatResult { get; }
     public string ActionLabel { get; }
+    public string CommandName => ActionLabel;
 
     public GestureDebugEventData(
         GestureDebugPhase phase,

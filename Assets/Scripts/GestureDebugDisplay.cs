@@ -183,27 +183,54 @@ public sealed class GestureDebugDisplay : MonoBehaviour
         if (eventData.InputKind == GestureInputKind.Hold)
             builder.Append(" (maintien)");
 
-        builder.Append(recognized ? " ✓" : " X");
+        builder.Append(" — ");
 
-        if (recognized && !eventData.IsActionMapped)
+        if (!recognized)
         {
-            builder.Append(" · non assigné");
-        }
-        else if (recognized &&
-                 eventData.HasCombatResult &&
-                 eventData.CombatResult !=
-                 CombatActionResult.Started)
-        {
-            builder.Append(" · ");
             builder.Append(
-                CombatResultLabel(eventData.CombatResult)
+                eventData.RecognitionStatus ==
+                GestureRecognitionStatus.Ambiguous
+                    ? "Geste ambigu"
+                    : "Geste invalide"
             );
+            return builder.ToString();
         }
-        else if (!recognized &&
-                 eventData.RecognitionStatus ==
-                 GestureRecognitionStatus.Ambiguous)
+
+        if (!eventData.IsActionMapped)
         {
-            builder.Append(" · ambigu");
+            builder.Append(
+                ResolveCommandName(
+                    eventData,
+                    "Non assigné"
+                )
+            );
+            return builder.ToString();
+        }
+
+        builder.Append(
+            ResolveCommandName(eventData, "Commande")
+        );
+
+        if (!eventData.HasCombatResult)
+        {
+            builder.Append(" — Reconnue");
+            return builder.ToString();
+        }
+
+        builder.Append(" — ");
+        if (eventData.CombatResult ==
+            CombatActionResult.Started)
+        {
+            builder.Append("Exécutée");
+        }
+        else
+        {
+            builder.Append("Refusée : ");
+            builder.Append(
+                CombatRefusalReason(
+                    eventData.CombatResult
+                )
+            );
         }
 
         return builder.ToString();
@@ -348,7 +375,19 @@ public sealed class GestureDebugDisplay : MonoBehaviour
         }
     }
 
-    private static string CombatResultLabel(
+    private static string ResolveCommandName(
+        GestureDebugEventData eventData,
+        string fallback)
+    {
+        if (!string.IsNullOrWhiteSpace(eventData.CommandName))
+            return eventData.CommandName;
+
+        return eventData.GestureId != CombatGestureId.None
+            ? eventData.GestureId.ToString()
+            : fallback;
+    }
+
+    private static string CombatRefusalReason(
         CombatActionResult result)
     {
         return result switch
@@ -358,7 +397,7 @@ public sealed class GestureDebugDisplay : MonoBehaviour
                 "endurance insuffisante",
             CombatActionResult.Unavailable =>
                 "combat indisponible",
-            _ => "exécuté"
+            _ => "raison inconnue"
         };
     }
 }

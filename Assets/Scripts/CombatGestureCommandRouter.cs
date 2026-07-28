@@ -3,20 +3,21 @@ public readonly struct RoutedGestureAction
     public bool IsMapped { get; }
     public bool HasCombatResult { get; }
     public CombatActionResult CombatResult { get; }
-    public string Label { get; }
+    public string DisplayName { get; }
+    public string Label => DisplayName;
     public int CategoryZone { get; }
 
     public RoutedGestureAction(
         bool isMapped,
         bool hasCombatResult,
         CombatActionResult combatResult,
-        string label,
+        string displayName,
         int categoryZone)
     {
         IsMapped = isMapped;
         HasCombatResult = hasCombatResult;
         CombatResult = combatResult;
-        Label = label;
+        DisplayName = displayName;
         CategoryZone = categoryZone;
     }
 
@@ -65,7 +66,7 @@ public sealed class CombatGestureCommandRouter
         {
             return Action(
                 fighter.LightAttack(),
-                "Attaque legere",
+                $"Attaque {(char)('A' + zone)}",
                 zone
             );
         }
@@ -74,13 +75,13 @@ public sealed class CombatGestureCommandRouter
         {
             return Action(
                 fighter.StartDefense(),
-                "Defense simple",
+                DefenseDisplayName(zone),
                 zone
             );
         }
 
         return RoutedGestureAction.Unmapped(
-            "Commande non assignee",
+            "Non assigné",
             zone
         );
     }
@@ -106,13 +107,13 @@ public sealed class CombatGestureCommandRouter
         {
             return Action(
                 fighter.StartCharge(),
-                "Recharge endurance",
+                "Recharge",
                 zone
             );
         }
 
         return RoutedGestureAction.Unmapped(
-            "Maintien non assigne",
+            "Non assigné",
             zone
         );
     }
@@ -157,13 +158,13 @@ public sealed class CombatGestureCommandRouter
 
             case CombatGestureId.GrandV:
                 return RoutedGestureAction.Unmapped(
-                    "Grand V reconnu",
+                    "Non assigné",
                     FirstZone(recognition)
                 );
 
             default:
                 return RoutedGestureAction.Unmapped(
-                    "Commande non assignee",
+                    "Non assigné",
                     FirstZone(recognition)
                 );
         }
@@ -171,16 +172,27 @@ public sealed class CombatGestureCommandRouter
 
     private static RoutedGestureAction Action(
         CombatActionResult result,
-        string label,
+        string displayName,
         int categoryZone)
     {
         return new RoutedGestureAction(
             true,
             true,
             result,
-            label,
+            displayName,
             categoryZone
         );
+    }
+
+    private static string DefenseDisplayName(int zone)
+    {
+        return zone switch
+        {
+            3 => "Défense gauche",
+            4 => "Défense centrale",
+            5 => "Défense droite",
+            _ => "Défense"
+        };
     }
 
     private static int FirstZone(
