@@ -42,6 +42,7 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
         new Material[3];
     private readonly Color[] rangeColors =
         new Color[3];
+    private Transform distanceRoot;
     private LineRenderer playerFacing;
     private LineRenderer opponentFacing;
     private Material lineMaterial;
@@ -71,6 +72,12 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
         {
             hideFlags = HideFlags.HideAndDontSave
         };
+
+        GameObject rootObject =
+            new("Combat Distance Debug Root");
+        rootObject.transform.SetParent(transform, false);
+        distanceRoot = rootObject.transform;
+        UpdateDistanceRoot(spatialController.Snapshot);
 
         circles[0] = CreateCircle(
             "Close Range Debug Circle",
@@ -179,6 +186,7 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
         if (!initialized)
             return;
 
+        UpdateDistanceRoot(spatialController.Snapshot);
         ApplyVisibility();
         RefreshHighlight(spatialController.Snapshot);
     }
@@ -190,11 +198,10 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
     {
         GameObject circleObject = new(objectName);
         circleObject.transform.SetParent(
-            opponent.transform,
+            distanceRoot,
             false
         );
-        circleObject.transform.localPosition =
-            new Vector3(0f, groundLocalY, 0f);
+        circleObject.transform.localPosition = Vector3.zero;
         circleObject.transform.localRotation =
             Quaternion.identity;
 
@@ -233,13 +240,12 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
     {
         GameObject fillObject = new(objectName);
         fillObject.transform.SetParent(
-            opponent.transform,
+            distanceRoot,
             false
         );
         fillObject.transform.localPosition =
             new Vector3(
                 0f,
-                groundLocalY +
                 fillLocalYOffset +
                 index * 0.001f,
                 0f
@@ -413,7 +419,26 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
     private void HandleSnapshotChanged(
         CombatSpatialSnapshot snapshot)
     {
+        UpdateDistanceRoot(snapshot);
         RefreshHighlight(snapshot);
+    }
+
+    private void UpdateDistanceRoot(
+        CombatSpatialSnapshot snapshot)
+    {
+        if (distanceRoot == null)
+            return;
+
+        Pose opponentPose =
+            snapshot.FirstFighter == opponent
+                ? snapshot.FirstNeutralPose
+                : snapshot.SecondNeutralPose;
+        Vector3 groundPosition = opponentPose.position;
+        groundPosition.y += groundLocalY;
+        distanceRoot.SetPositionAndRotation(
+            groundPosition,
+            Quaternion.identity
+        );
     }
 
     private void RefreshHighlight(

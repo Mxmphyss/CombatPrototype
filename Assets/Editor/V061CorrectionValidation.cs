@@ -812,41 +812,64 @@ public static class V061CorrectionValidation
             "Distance debug circles must not create colliders."
         );
         ValidateCircle(
+            visualObject.transform,
             context,
             "Close Range Debug Circle",
             DistanceLevel.CloseRange
         );
         ValidateCircle(
+            visualObject.transform,
             context,
             "Mid Range Debug Circle",
             DistanceLevel.MidRange
         );
         ValidateCircle(
+            visualObject.transform,
             context,
             "Long Range Debug Circle",
             DistanceLevel.LongRange
         );
         ValidateRangeFill(
+            visualObject.transform,
             context,
             "Close Range Debug Fill"
         );
         ValidateRangeFill(
+            visualObject.transform,
             context,
             "Mid Range Debug Fill"
         );
         ValidateRangeFill(
+            visualObject.transform,
             context,
             "Long Range Debug Fill"
         );
-        LineRenderer close = context.SecondCombat.transform
+        Transform distanceRoot = visualObject.transform.Find(
+            "Combat Distance Debug Root"
+        );
+        LineRenderer close = distanceRoot
             .Find("Close Range Debug Circle")
             .GetComponent<LineRenderer>();
-        LineRenderer mid = context.SecondCombat.transform
+        LineRenderer mid = distanceRoot
             .Find("Mid Range Debug Circle")
             .GetComponent<LineRenderer>();
         Require(
             mid.startWidth > close.startWidth,
             "The current MidRange circle is not highlighted."
+        );
+        Vector3 stableCirclePosition =
+            close.transform.position;
+        context.SecondCombat.transform.position +=
+            Vector3.right * 0.5f;
+        Require(
+            Vector3.Distance(
+                stableCirclePosition,
+                close.transform.position
+            ) <= Tolerance,
+            "A temporary enemy animation moved the ground zones."
+        );
+        context.Controller.RestoreNeutralPose(
+            context.SecondCombat
         );
         visualizer.SetVisible(false);
         Require(
@@ -858,20 +881,25 @@ public static class V061CorrectionValidation
     }
 
     private static void ValidateCircle(
+        Transform visualRoot,
         ValidationContext context,
         string objectName,
         DistanceLevel level)
     {
+        Transform distanceRoot = visualRoot.Find(
+            "Combat Distance Debug Root"
+        );
         Transform circleTransform =
-            context.SecondCombat.transform.Find(objectName);
+            distanceRoot != null
+                ? distanceRoot.Find(objectName)
+                : null;
         Require(
             circleTransform != null,
             $"Missing distance circle {objectName}."
         );
         Require(
-            circleTransform.parent ==
-                context.SecondCombat.transform,
-            $"{objectName} does not follow the opponent."
+            circleTransform.parent == distanceRoot,
+            $"{objectName} is not attached to the stable zone root."
         );
         LineRenderer line =
             circleTransform.GetComponent<LineRenderer>();
@@ -888,19 +916,24 @@ public static class V061CorrectionValidation
     }
 
     private static void ValidateRangeFill(
+        Transform visualRoot,
         ValidationContext context,
         string objectName)
     {
+        Transform distanceRoot = visualRoot.Find(
+            "Combat Distance Debug Root"
+        );
         Transform fillTransform =
-            context.SecondCombat.transform.Find(objectName);
+            distanceRoot != null
+                ? distanceRoot.Find(objectName)
+                : null;
         Require(
             fillTransform != null,
             $"Missing distance fill {objectName}."
         );
         Require(
-            fillTransform.parent ==
-                context.SecondCombat.transform,
-            $"{objectName} does not follow the opponent."
+            fillTransform.parent == distanceRoot,
+            $"{objectName} is not attached to the stable zone root."
         );
         MeshFilter filter =
             fillTransform.GetComponent<MeshFilter>();
