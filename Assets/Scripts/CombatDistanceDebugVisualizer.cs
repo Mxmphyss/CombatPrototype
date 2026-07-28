@@ -191,6 +191,18 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
         RefreshHighlight(spatialController.Snapshot);
     }
 
+    private void LateUpdate()
+    {
+        if (!initialized ||
+            spatialController == null ||
+            distanceRoot == null)
+        {
+            return;
+        }
+
+        UpdateDistanceRoot(spatialController.Snapshot);
+    }
+
     private LineRenderer CreateCircle(
         string objectName,
         DistanceLevel level,
@@ -426,14 +438,23 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
     private void UpdateDistanceRoot(
         CombatSpatialSnapshot snapshot)
     {
-        if (distanceRoot == null)
+        if (distanceRoot == null || opponent == null)
             return;
 
-        Pose opponentPose =
-            snapshot.FirstFighter == opponent
-                ? snapshot.FirstNeutralPose
-                : snapshot.SecondNeutralPose;
-        Vector3 groundPosition = opponentPose.position;
+        Vector3 groundPosition;
+        if (snapshot.HasPendingDodge)
+        {
+            groundPosition = opponent.transform.position;
+        }
+        else
+        {
+            Pose opponentPose =
+                snapshot.FirstFighter == opponent
+                    ? snapshot.FirstNeutralPose
+                    : snapshot.SecondNeutralPose;
+            groundPosition = opponentPose.position;
+        }
+
         groundPosition.y += groundLocalY;
         distanceRoot.SetPositionAndRotation(
             groundPosition,

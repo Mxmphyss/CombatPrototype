@@ -861,6 +861,7 @@ public static class V061CorrectionValidation
             close.transform.position;
         context.SecondCombat.transform.position +=
             Vector3.right * 0.5f;
+        Invoke(visualizer, "LateUpdate");
         Require(
             Vector3.Distance(
                 stableCirclePosition,
@@ -871,6 +872,42 @@ public static class V061CorrectionValidation
         context.Controller.RestoreNeutralPose(
             context.SecondCombat
         );
+        Require(
+            context.Controller.TryPrepareDodge(
+                context.SecondCombat,
+                DodgeDirection.Left,
+                out SpatialDodgeTransaction transaction
+            ),
+            "Unable to prepare the opponent dodge for distance visuals."
+        );
+        Require(
+            context.Controller.PreviewPreparedDodge(
+                transaction.Id,
+                0.5f
+            ),
+            "Unable to preview the opponent dodge for distance visuals."
+        );
+        Invoke(visualizer, "LateUpdate");
+        Vector2 rootPosition = new(
+            distanceRoot.position.x,
+            distanceRoot.position.z
+        );
+        Vector2 opponentPosition = new(
+            context.SecondCombat.transform.position.x,
+            context.SecondCombat.transform.position.z
+        );
+        Require(
+            Vector2.Distance(
+                rootPosition,
+                opponentPosition
+            ) <= Tolerance,
+            "The ground zones did not follow the opponent dodge preview."
+        );
+        Require(
+            context.Controller.CancelDodge(transaction),
+            "Unable to cancel the opponent distance visual dodge."
+        );
+        Invoke(visualizer, "LateUpdate");
         visualizer.SetVisible(false);
         Require(
             !visualizer.IsVisible,
@@ -1062,6 +1099,18 @@ public static class V061CorrectionValidation
                 "Gesture zone sequence mismatch."
             );
         }
+    }
+
+    private static void Invoke(
+        object target,
+        string methodName)
+    {
+        MethodInfo method = target.GetType().GetMethod(
+            methodName,
+            BindingFlags.Instance | BindingFlags.NonPublic
+        );
+        Require(method != null, $"Missing method {methodName}.");
+        method.Invoke(target, null);
     }
 
     private static void Invoke(
