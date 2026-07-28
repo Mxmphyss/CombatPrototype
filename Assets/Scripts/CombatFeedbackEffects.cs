@@ -30,6 +30,7 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
 
     private FighterCombat player;
     private FighterCombat enemy;
+    private CombatSpatialController spatialController;
     private Camera combatCamera;
     private Renderer playerRenderer;
     private Renderer enemyRenderer;
@@ -57,13 +58,15 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
     public void Initialize(
         FighterCombat playerCombat,
         FighterCombat enemyCombat,
-        Camera targetCamera)
+        Camera targetCamera,
+        CombatSpatialController spatialAuthority = null)
     {
         Unsubscribe();
         ResetEffects();
 
         player = playerCombat;
         enemy = enemyCombat;
+        spatialController = spatialAuthority;
         combatCamera = targetCamera;
         playerRenderer = player.GetComponentInChildren<Renderer>();
         enemyRenderer = enemy.GetComponentInChildren<Renderer>();
@@ -94,14 +97,17 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
         {
             if (player != null)
             {
-                player.transform.position = playerNeutralPosition;
+                if (spatialController == null)
+                    player.transform.position = playerNeutralPosition;
                 player.transform.localScale = playerNeutralScale;
             }
             if (enemy != null)
             {
-                enemy.transform.position = enemyNeutralPosition;
+                if (spatialController == null)
+                    enemy.transform.position = enemyNeutralPosition;
                 enemy.transform.localScale = enemyNeutralScale;
             }
+            spatialController?.RestoreNeutralPoses();
             if (combatCamera != null)
             {
                 combatCamera.transform.localPosition =
@@ -153,7 +159,9 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
 
     private void HandleImpact(CombatImpact impact)
     {
-        if (!feedbackEnabled)
+        if (!feedbackEnabled ||
+            (spatialController != null &&
+             !spatialController.IsCombatEnabled))
             return;
 
         bool directHit = impact.Result == CombatHitResult.Hit;
@@ -220,15 +228,10 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
         if (existing != null)
             StopCoroutine(existing);
 
-        Vector3 neutralPosition =
-            target == player
-                ? playerNeutralPosition
-                : enemyNeutralPosition;
         Coroutine routine = StartCoroutine(
             RecoilRoutine(
                 target,
-                away.normalized,
-                neutralPosition
+                away.normalized
             )
         );
         if (target == player)
@@ -370,32 +373,75 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
 
     private IEnumerator RecoilRoutine(
         FighterCombat target,
-        Vector3 direction,
-        Vector3 neutralPosition)
+        Vector3 direction)
     {
-        Vector3 start = target.transform.position;
-        Vector3 peak = start + direction * recoilDistance;
+        Vector3 neutralPosition =
+            GetCurrentNeutralPosition(target);
+        Vector3 startOffset =
+            target.transform.position - neutralPosition;
+        Vector3 peakOffset =
+            direction * recoilDistance;
         float halfDuration =
             Mathf.Max(0.005f, recoilDuration * 0.5f);
+        float elapsed = 0f;
 
-        yield return MoveUnscaled(
-            target.transform,
-            start,
-            peak,
-            halfDuration
-        );
-        yield return MoveUnscaled(
-            target.transform,
-            peak,
-            neutralPosition,
-            halfDuration
-        );
+        while (elapsed < halfDuration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            neutralPosition =
+                GetCurrentNeutralPosition(target);
+            target.transform.position =
+                neutralPosition +
+                Vector3.Lerp(
+                    startOffset,
+                    peakOffset,
+                    Mathf.Clamp01(elapsed / halfDuration)
+                );
+            yield return null;
+        }
 
-        target.transform.position = neutralPosition;
+        elapsed = 0f;
+        while (elapsed < halfDuration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            neutralPosition =
+                GetCurrentNeutralPosition(target);
+            target.transform.position =
+                neutralPosition +
+                Vector3.Lerp(
+                    peakOffset,
+                    Vector3.zero,
+                    Mathf.Clamp01(elapsed / halfDuration)
+                );
+            yield return null;
+        }
+
+        if (spatialController != null)
+            spatialController.RestoreNeutralPose(target);
+        else
+            target.transform.position =
+                GetCurrentNeutralPosition(target);
         if (target == player)
             playerRecoilRoutine = null;
         else
             enemyRecoilRoutine = null;
+    }
+
+    private Vector3 GetCurrentNeutralPosition(
+        FighterCombat target)
+    {
+        if (spatialController != null &&
+            spatialController.TryGetNeutralPosition(
+                target,
+                out Vector3 neutralPosition
+            ))
+        {
+            return neutralPosition;
+        }
+
+        return target == player
+            ? playerNeutralPosition
+            : enemyNeutralPosition;
     }
 
     private IEnumerator FlashRoutine(

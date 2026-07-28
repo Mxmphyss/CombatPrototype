@@ -10,6 +10,7 @@ public sealed class CombatManager : MonoBehaviour
     private EnemyAutoCombat enemyAI;
     private CombatFeedbackEffects feedbackEffects;
     private PrototypeDebugUI prototypeDebugUI;
+    private CombatSpatialController spatialController;
     private bool combatEnded;
     private bool isResetting;
 
@@ -68,6 +69,26 @@ public sealed class CombatManager : MonoBehaviour
             return;
         }
 
+        spatialController =
+            gameObject.AddComponent<CombatSpatialController>();
+        if (!spatialController.Initialize(
+                playerCombat,
+                enemyCombat
+            ))
+        {
+            Debug.LogError(
+                "CombatManager could not initialize spatial authority."
+            );
+            enabled = false;
+            return;
+        }
+
+        spatialController.Configure(
+            CreateSpatialSettings(sharedRules)
+        );
+        playerCombat.SetSpatialController(spatialController);
+        enemyCombat.SetSpatialController(spatialController);
+
         hud = CombatHUD.Create(
             playerCombat,
             enemyCombat,
@@ -85,7 +106,8 @@ public sealed class CombatManager : MonoBehaviour
         prototypeDebugUI = PrototypeDebugUI.Create(
             hud.transform,
             enemyAI,
-            hud.GestureGrid
+            hud.GestureGrid,
+            spatialController
         );
 
         feedbackEffects =
@@ -93,7 +115,8 @@ public sealed class CombatManager : MonoBehaviour
         feedbackEffects.Initialize(
             playerCombat,
             enemyCombat,
-            Camera.main
+            Camera.main,
+            spatialController
         );
 
         Subscribe();
@@ -103,39 +126,37 @@ public sealed class CombatManager : MonoBehaviour
     private void OnDestroy()
     {
         Unsubscribe();
-
-        if (enemyAI != null)
-            enemyAI.StopAI();
-
-        if (feedbackEffects != null)
-            feedbackEffects.ResetEffects();
+        CancelTransientCombatState(true);
     }
 
     public void RestartCombat()
     {
-        if (isResetting)
+        if (isResetting || !combatEnded)
             return;
 
         isResetting = true;
 
-        enemyAI?.StopAI();
-        feedbackEffects?.ResetEffects();
-
-        playerCombat.SetCombatEnabled(false);
-        enemyCombat.SetCombatEnabled(false);
+        CancelTransientCombatState(true);
 
         playerStats.ResetStats();
         enemyStats.ResetStats();
 
         playerCombat.ResetCombatState();
         enemyCombat.ResetCombatState();
+        spatialController?.ResetDuel();
+        spatialController?.SetCombatEnabled(true);
 
         combatEnded = false;
         hud.HideEndState();
         hud.RefreshAll();
         hud.SetGridEnabled(true);
 
-        enemyAI.Initialize(enemyCombat, playerCombat, hud);
+        enemyAI.Initialize(
+            enemyCombat,
+            playerCombat,
+            hud,
+            spatialController
+        );
         prototypeDebugUI?.ResetForReplay();
         isResetting = false;
     }
@@ -143,12 +164,22 @@ public sealed class CombatManager : MonoBehaviour
     private void StartCombat()
     {
         combatEnded = false;
+        hud.SetGridEnabled(false);
+        hud.GestureGrid?.ResetForReplay();
+        spatialController?.SetCombatEnabled(false);
         playerCombat.ResetCombatState();
         enemyCombat.ResetCombatState();
+        spatialController?.ResetDuel();
+        spatialController?.SetCombatEnabled(true);
         hud.HideEndState();
         hud.SetGridEnabled(true);
         hud.RefreshAll();
-        enemyAI.Initialize(enemyCombat, playerCombat, hud);
+        enemyAI.Initialize(
+            enemyCombat,
+            playerCombat,
+            hud,
+            spatialController
+        );
         prototypeDebugUI?.ResetForReplay();
     }
 
@@ -158,11 +189,22 @@ public sealed class CombatManager : MonoBehaviour
             return;
 
         combatEnded = true;
-        enemyAI?.StopAI();
-
-        playerCombat.SetCombatEnabled(false);
-        enemyCombat.SetCombatEnabled(false);
+        CancelTransientCombatState(true);
         hud.ShowEndState(playerWon);
+    }
+
+    private void CancelTransientCombatState(
+        bool resetFeedback)
+    {
+        enemyAI?.StopAI();
+        hud?.SetGridEnabled(false);
+        hud?.GestureGrid?.ResetForReplay();
+        if (resetFeedback)
+            feedbackEffects?.ResetEffects();
+
+        spatialController?.SetCombatEnabled(false);
+        playerCombat?.SetCombatEnabled(false);
+        enemyCombat?.SetCombatEnabled(false);
     }
 
     private void Subscribe()
@@ -182,5 +224,58 @@ public sealed class CombatManager : MonoBehaviour
     private void HandleFighterDeath(FighterStats deadFighter)
     {
         EndCombat(deadFighter == enemyStats);
+    }
+
+    private static CombatSpatialSettings CreateSpatialSettings(
+        CombatRulesConfig rules)
+    {
+        float closeMidBoundary =
+            (rules.CloseDistance + rules.MidDistance) * 0.5f;
+        float midLongBoundary =
+            (rules.MidDistance + rules.LongDistance) * 0.5f;
+        float maximumTolerance = Mathf.Max(
+            0f,
+            Mathf.Min(
+                rules.MidDistance - closeMidBoundary,
+                midLongBoundary - rules.MidDistance
+            ) - 0.01f
+        );
+        float safeTolerance = Mathf.Min(
+            rules.DistanceTolerance,
+            maximumTolerance
+        );
+
+        return new CombatSpatialSettings
+        {
+            MinimumDistance = rules.CloseDistance,
+            CloseRangeUpperBound =
+                Mathf.Max(
+                    rules.CloseDistance,
+                    closeMidBoundary -
+                    safeTolerance
+                ),
+            MidRangeUpperBound =
+                Mathf.Max(
+                    closeMidBoundary,
+                    midLongBoundary -
+                    safeTolerance
+                ),
+            MidRangeDistance = rules.MidDistance,
+            MaximumDistance = rules.LongDistance,
+            AdvanceSpeed = rules.ForwardMoveSpeed,
+            RetreatSpeed = rules.BackwardMoveSpeed,
+            StrafeSpeed = rules.LateralMoveSpeed,
+            RotationSpeed = rules.RotationSpeed,
+            DodgeOrientationAngle =
+                rules.DodgeOrientationAngle,
+            AutoFaceFlanks = true,
+            FlankAutoFaceDelay =
+                rules.FlankAutoFaceDelay,
+            FaceDamageMultiplier = 1f,
+            FlankDamageMultiplier =
+                rules.FlankDamageMultiplier,
+            BackDamageMultiplier =
+                rules.BackDamageMultiplier
+        };
     }
 }

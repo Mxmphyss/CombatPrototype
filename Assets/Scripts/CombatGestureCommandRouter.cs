@@ -3,6 +3,7 @@ public readonly struct RoutedGestureAction
     public bool IsMapped { get; }
     public bool HasCombatResult { get; }
     public CombatActionResult CombatResult { get; }
+    public CombatRefusalReason RefusalReason { get; }
     public string DisplayName { get; }
     public string Label => DisplayName;
     public int CategoryZone { get; }
@@ -12,11 +13,14 @@ public readonly struct RoutedGestureAction
         bool hasCombatResult,
         CombatActionResult combatResult,
         string displayName,
-        int categoryZone)
+        int categoryZone,
+        CombatRefusalReason refusalReason =
+            CombatRefusalReason.None)
     {
         IsMapped = isMapped;
         HasCombatResult = hasCombatResult;
         CombatResult = combatResult;
+        RefusalReason = refusalReason;
         DisplayName = displayName;
         CategoryZone = categoryZone;
     }
@@ -30,7 +34,8 @@ public readonly struct RoutedGestureAction
             false,
             CombatActionResult.Unavailable,
             label,
-            categoryZone
+            categoryZone,
+            CombatRefusalReason.None
         );
     }
 }
@@ -39,10 +44,15 @@ public sealed class CombatGestureCommandRouter
 {
     private const int MiddleDefenseZone = 4;
     private const int MiddleMovementZone = 7;
+    private const int ContextMovementZone = 9;
 
     private readonly FighterCombat fighter;
 
     public bool IsDead => fighter == null || fighter.IsDead;
+    public float PermutationFeedbackDuration =>
+        fighter != null
+            ? fighter.Rules.PermutationFeedbackDuration
+            : 0.35f;
     public bool ShouldCancelInput =>
         fighter == null ||
         fighter.CurrentState is
@@ -129,6 +139,67 @@ public sealed class CombatGestureCommandRouter
             fighter.StopChargeInput();
     }
 
+    public RoutedGestureAction BeginStrokeHold(
+        int destinationZone)
+    {
+        if (fighter == null)
+        {
+            return RoutedGestureAction.Unmapped(
+                "Commande indisponible",
+                destinationZone
+            );
+        }
+
+        SpatialMovementType movementType =
+            destinationZone switch
+            {
+                MiddleDefenseZone =>
+                    SpatialMovementType.Advance,
+                ContextMovementZone =>
+                    SpatialMovementType.Retreat,
+                6 => SpatialMovementType.StrafeLeft,
+                8 => SpatialMovementType.StrafeRight,
+                _ => SpatialMovementType.None
+            };
+
+        if (movementType == SpatialMovementType.None)
+        {
+            return RoutedGestureAction.Unmapped(
+                "Non assigné",
+                destinationZone
+            );
+        }
+
+        return Action(
+            fighter.StartSpatialMovement(movementType),
+            SpatialMovementDisplayName(movementType),
+            destinationZone
+        );
+    }
+
+    public void EndStrokeHold()
+    {
+        fighter?.StopSpatialMovement();
+    }
+
+    public RoutedGestureAction TryPermutation(
+        long commandToken)
+    {
+        if (fighter == null)
+        {
+            return RoutedGestureAction.Unmapped(
+                "Commande indisponible",
+                6
+            );
+        }
+
+        return Action(
+            fighter.TryPermutation(commandToken),
+            "Permutation",
+            6
+        );
+    }
+
     public RoutedGestureAction ExecuteStroke(
         GestureRecognitionResult recognition)
     {
@@ -170,18 +241,40 @@ public sealed class CombatGestureCommandRouter
         }
     }
 
-    private static RoutedGestureAction Action(
+    private RoutedGestureAction Action(
         CombatActionResult result,
         string displayName,
         int categoryZone)
     {
+        CombatRefusalReason refusalReason =
+            result == CombatActionResult.Started ||
+            fighter == null
+                ? CombatRefusalReason.None
+                : fighter.LastRefusalReason;
+
         return new RoutedGestureAction(
             true,
             true,
             result,
             displayName,
-            categoryZone
+            categoryZone,
+            refusalReason
         );
+    }
+
+    private static string SpatialMovementDisplayName(
+        SpatialMovementType movementType)
+    {
+        return movementType switch
+        {
+            SpatialMovementType.Advance => "Avancer",
+            SpatialMovementType.Retreat => "Reculer",
+            SpatialMovementType.StrafeLeft =>
+                "Marche gauche",
+            SpatialMovementType.StrafeRight =>
+                "Marche droite",
+            _ => "Déplacement"
+        };
     }
 
     private static string DefenseDisplayName(int zone)

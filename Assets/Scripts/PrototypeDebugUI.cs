@@ -11,15 +11,18 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         new(0.72f, 0.35f, 0.14f, 0.96f);
 
     private EnemyAutoCombat enemyAI;
+    private CombatSpatialController spatialController;
     private GestureDebugDisplay gestureDisplay;
     private Button aiToggleButton;
     private Image aiToggleImage;
     private Text aiToggleLabel;
+    private Text spatialStateLabel;
 
     public static PrototypeDebugUI Create(
         Transform parent,
         EnemyAutoCombat enemyAutoCombat,
-        CombatGestureGrid gestureGrid)
+        CombatGestureGrid gestureGrid,
+        CombatSpatialController spatialAuthority = null)
     {
         GameObject panelObject =
             new("Prototype Combat Debug UI");
@@ -31,7 +34,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             new Vector2(0.5f, 0f);
         rect.pivot = new Vector2(0.5f, 0f);
         rect.anchoredPosition = new Vector2(0f, 760f);
-        rect.sizeDelta = new Vector2(960f, 280f);
+        rect.sizeDelta = new Vector2(960f, 320f);
 
         Image background =
             panelObject.AddComponent<Image>();
@@ -46,17 +49,24 @@ public sealed class PrototypeDebugUI : MonoBehaviour
 
         PrototypeDebugUI debugUI =
             panelObject.AddComponent<PrototypeDebugUI>();
-        debugUI.Initialize(enemyAutoCombat, gestureGrid);
+        debugUI.Initialize(
+            enemyAutoCombat,
+            gestureGrid,
+            spatialAuthority
+        );
         return debugUI;
     }
 
     private void Initialize(
         EnemyAutoCombat enemyAutoCombat,
-        CombatGestureGrid gestureGrid)
+        CombatGestureGrid gestureGrid,
+        CombatSpatialController spatialAuthority)
     {
         enemyAI = enemyAutoCombat;
+        spatialController = spatialAuthority;
         BuildTitle();
         BuildAIToggle();
+        BuildSpatialState();
 
         gestureDisplay =
             gameObject.AddComponent<GestureDebugDisplay>();
@@ -67,8 +77,14 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             enemyAI.OnAIEnabledChanged +=
                 HandleAIEnabledChanged;
         }
+        if (spatialController != null)
+        {
+            spatialController.OnSnapshotChanged +=
+                HandleSpatialSnapshotChanged;
+        }
 
         RefreshAIToggle();
+        RefreshSpatialState();
     }
 
     private void OnDestroy()
@@ -78,12 +94,18 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             enemyAI.OnAIEnabledChanged -=
                 HandleAIEnabledChanged;
         }
+        if (spatialController != null)
+        {
+            spatialController.OnSnapshotChanged -=
+                HandleSpatialSnapshotChanged;
+        }
     }
 
     public void ResetForReplay()
     {
         gestureDisplay?.Clear();
         RefreshAIToggle();
+        RefreshSpatialState();
     }
 
     private void BuildTitle()
@@ -158,6 +180,35 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         aiToggleLabel.raycastTarget = false;
     }
 
+    private void BuildSpatialState()
+    {
+        GameObject labelObject =
+            new("Prototype Spatial State");
+        labelObject.transform.SetParent(transform, false);
+
+        RectTransform rect =
+            labelObject.AddComponent<RectTransform>();
+        rect.anchorMin = rect.anchorMax =
+            new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = new Vector2(24f, -278f);
+        rect.sizeDelta = new Vector2(910f, 30f);
+
+        spatialStateLabel =
+            labelObject.AddComponent<Text>();
+        spatialStateLabel.font =
+            Resources.GetBuiltinResource<Font>(
+                "LegacyRuntime.ttf"
+            );
+        spatialStateLabel.fontSize = 19;
+        spatialStateLabel.fontStyle = FontStyle.Bold;
+        spatialStateLabel.alignment =
+            TextAnchor.MiddleLeft;
+        spatialStateLabel.color =
+            new Color(0.72f, 0.86f, 1f, 1f);
+        spatialStateLabel.raycastTarget = false;
+    }
+
     private void ToggleEnemyAI()
     {
         if (enemyAI == null)
@@ -169,6 +220,12 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     private void HandleAIEnabledChanged(bool enabled)
     {
         RefreshAIToggle();
+    }
+
+    private void HandleSpatialSnapshotChanged(
+        CombatSpatialSnapshot snapshot)
+    {
+        RefreshSpatialState(snapshot);
     }
 
     private void RefreshAIToggle()
@@ -195,5 +252,71 @@ public sealed class PrototypeDebugUI : MonoBehaviour
                     ? "PROTO · IA ACTIVE"
                     : "PROTO · IA EN PAUSE";
         }
+    }
+
+    private void RefreshSpatialState()
+    {
+        if (spatialController == null)
+        {
+            if (spatialStateLabel != null)
+                spatialStateLabel.text =
+                    "ESPACE · indisponible";
+            return;
+        }
+
+        RefreshSpatialState(spatialController.Snapshot);
+    }
+
+    private void RefreshSpatialState(
+        CombatSpatialSnapshot snapshot)
+    {
+        if (spatialStateLabel == null)
+            return;
+
+        spatialStateLabel.text =
+            $"ESPACE · {DistanceLabel(snapshot.Distance)}" +
+            $" · {OrientationLabel(snapshot.Orientation)}" +
+            $" · {MovementLabel(snapshot.FirstMovement)}";
+    }
+
+    private static string DistanceLabel(DistanceLevel distance)
+    {
+        return distance switch
+        {
+            DistanceLevel.CloseRange => "Proche",
+            DistanceLevel.MidRange => "Moyenne",
+            DistanceLevel.LongRange => "Longue",
+            _ => distance.ToString()
+        };
+    }
+
+    private static string OrientationLabel(
+        RelativeOrientation orientation)
+    {
+        return orientation switch
+        {
+            RelativeOrientation.Face => "Face",
+            RelativeOrientation.LeftFlank =>
+                "Flanc gauche",
+            RelativeOrientation.RightFlank =>
+                "Flanc droit",
+            RelativeOrientation.Back => "Dos",
+            _ => orientation.ToString()
+        };
+    }
+
+    private static string MovementLabel(
+        SpatialMovementType movement)
+    {
+        return movement switch
+        {
+            SpatialMovementType.Advance => "Avance",
+            SpatialMovementType.Retreat => "Recule",
+            SpatialMovementType.StrafeLeft =>
+                "Marche gauche",
+            SpatialMovementType.StrafeRight =>
+                "Marche droite",
+            _ => "Immobile"
+        };
     }
 }

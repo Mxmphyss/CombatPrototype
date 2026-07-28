@@ -42,7 +42,12 @@ public enum CombatGestureId
     StaminaCharge,
     DodgeRight,
     DodgeLeft,
-    GrandV
+    GrandV,
+    Advance,
+    Retreat,
+    StrafeLeft,
+    StrafeRight,
+    Permutation
 }
 
 [Serializable]

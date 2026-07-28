@@ -180,8 +180,12 @@ public sealed class GestureDebugDisplay : MonoBehaviour
         builder.Clear();
         AppendZones(builder, eventData.Zones);
 
-        if (eventData.InputKind == GestureInputKind.Hold)
+        if (eventData.InputKind is
+            GestureInputKind.Hold or
+            GestureInputKind.StrokeAndHold)
+        {
             builder.Append(" (maintien)");
+        }
 
         builder.Append(" — ");
 
@@ -227,7 +231,8 @@ public sealed class GestureDebugDisplay : MonoBehaviour
         {
             builder.Append("Refusée : ");
             builder.Append(
-                CombatRefusalReason(
+                FormatRefusalReason(
+                    eventData.RefusalReason,
                     eventData.CombatResult
                 )
             );
@@ -368,7 +373,7 @@ public sealed class GestureDebugDisplay : MonoBehaviour
 
             int zone = zones[index];
             destination.Append(
-                zone is >= 0 and <= 8
+                zone is >= 0 and <= 9
                     ? (char)('A' + zone)
                     : '?'
             );
@@ -387,9 +392,38 @@ public sealed class GestureDebugDisplay : MonoBehaviour
             : fallback;
     }
 
-    private static string CombatRefusalReason(
+    private static string FormatRefusalReason(
+        CombatRefusalReason refusalReason,
         CombatActionResult result)
     {
+        if (refusalReason != CombatRefusalReason.None)
+        {
+            return refusalReason switch
+            {
+                CombatRefusalReason.Busy =>
+                    "action en cours",
+                CombatRefusalReason.NotEnoughStamina =>
+                    "endurance insuffisante",
+                CombatRefusalReason.CombatUnavailable =>
+                    "combat indisponible",
+                CombatRefusalReason.Stunned =>
+                    "combattant étourdi",
+                CombatRefusalReason.Dead =>
+                    "combattant mort",
+                CombatRefusalReason.FlankGuardForbidden =>
+                    "garde de flanc interdite",
+                CombatRefusalReason.BackGuardForbidden =>
+                    "garde arrière interdite",
+                CombatRefusalReason.IncompatibleOrientation =>
+                    "orientation incompatible",
+                CombatRefusalReason.DistanceLimit =>
+                    "limite de distance",
+                CombatRefusalReason.DuplicateCommand =>
+                    "commande déjà traitée",
+                _ => refusalReason.ToString()
+            };
+        }
+
         return result switch
         {
             CombatActionResult.Busy => "action en cours",

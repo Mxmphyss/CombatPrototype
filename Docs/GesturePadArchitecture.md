@@ -84,3 +84,22 @@ Unknown or close-scoring gestures do not trigger a combat action.
 - analytical geometric templates for two dodges and the large V;
 - no learned model or neural network;
 - no combat binding for the large V yet.
+
+## v0.6 spatial command cycle
+
+The base 3x3 grid remains unchanged. A contextual point J is shown and
+enabled only when `PointerDown` started on H; crossing H from another
+starting zone never activates it. H on its own keeps the stamina recharge
+hold.
+
+From an H-origin pointer cycle, a stroke to G/E/I/J followed by a hold
+starts live left/advance/right/retreat movement before `PointerUp`.
+Leaving the destination, releasing the pointer, cancellation or reset
+ends that movement. Once live movement has started, release cannot also
+dispatch a tap or completed stroke.
+
+`G-E-I` is the permutation path. It is latched once per pointer cycle and
+routed with a unique command token so repeated delivery cannot spend the
+cost or apply the atomic swap twice. Dodge strokes remain `G-H-I` and
+`I-H-G`. Every end/cancel/reset path clears contextual J, the live
+stroke-hold and the permutation latch idempotently.

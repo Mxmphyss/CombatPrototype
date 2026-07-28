@@ -38,7 +38,8 @@ public enum CombatHitResult
     GuardBroken,
     PerfectGuard,
     Dodged,
-    PerfectDodge
+    PerfectDodge,
+    Interrupted
 }
 
 public readonly struct CombatImpact
@@ -47,17 +48,28 @@ public readonly struct CombatImpact
     public FighterCombat Target { get; }
     public CombatHitResult Result { get; }
     public float ImpactTime { get; }
+    public RelativeOrientation Orientation { get; }
+    public float PositionalMultiplier { get; }
+    public float DamageApplied { get; }
 
     public CombatImpact(
         FighterCombat attacker,
         FighterCombat target,
         CombatHitResult result,
-        float impactTime)
+        float impactTime,
+        RelativeOrientation orientation =
+            RelativeOrientation.Face,
+        float positionalMultiplier = 1f,
+        float damageApplied = 0f)
     {
         Attacker = attacker;
         Target = target;
         Result = result;
         ImpactTime = impactTime;
+        Orientation = orientation;
+        PositionalMultiplier =
+            Mathf.Max(0f, positionalMultiplier);
+        DamageApplied = Mathf.Max(0f, damageApplied);
     }
 }
 
@@ -91,6 +103,8 @@ public class FighterCombat : MonoBehaviour
     [SerializeField] private FighterStats targetStats;
     [SerializeField] private FighterCombat targetCombat;
     [SerializeField] private CombatRulesConfig combatRules;
+
+    private CombatSpatialController spatialController;
 
     [Header("Attaque legere")]
     [SerializeField] private float lightAttackDamage = 20f;
@@ -179,6 +193,15 @@ public class FighterCombat : MonoBehaviour
         IsRiposteWindowActive
             ? Mathf.Max(0f, riposteWindowEndsAt - Time.time)
             : 0f;
+    public CombatRefusalReason LastRefusalReason
+    {
+        get;
+        private set;
+    }
+    public int IncomingImpactRevision =>
+        incomingImpactRevision;
+    public CombatSpatialController SpatialController =>
+        spatialController;
 
     private bool combatEnabled = true;
     private bool heldGuardActive;
@@ -189,6 +212,10 @@ public class FighterCombat : MonoBehaviour
     private Vector3 initialPosition;
     private Quaternion initialRotation;
     private Coroutine simpleDefenseRoutine;
+    private SpatialDodgeTransaction activeSpatialDodge;
+    private bool hasActiveSpatialDodge;
+    private int incomingImpactRevision;
+    private long lastPermutationToken = long.MinValue;
 
     private void Awake()
     {
@@ -218,6 +245,15 @@ public class FighterCombat : MonoBehaviour
         CancelActiveActions(false);
     }
 
+    private void OnDestroy()
+    {
+        if (spatialController != null)
+        {
+            spatialController.OnDodgeCancelled -=
+                HandleSpatialDodgeCancelled;
+        }
+    }
+
     private void Update()
     {
         if (CurrentState == FighterCombatState.Charging)
@@ -227,19 +263,30 @@ public class FighterCombat : MonoBehaviour
     public CombatActionResult LightAttack(
         float startupDurationOverride = -1f)
     {
+        ClearRefusal();
         if (!CanStartAction() ||
             targetStats == null ||
             targetStats.IsDead)
         {
-            return CombatActionResult.Unavailable;
+            return RefuseUnavailable();
         }
 
         if (CurrentState != FighterCombatState.Idle)
-            return CombatActionResult.Busy;
+            return Refuse(
+                CombatActionResult.Busy,
+                CombatRefusalReason.Busy
+            );
 
         if (!fighterStats.SpendStamina(lightAttackStaminaCost))
-            return CombatActionResult.NotEnoughStamina;
+        {
+            return Refuse(
+                CombatActionResult.NotEnoughStamina,
+                CombatRefusalReason.NotEnoughStamina
+            );
+        }
 
+        StopSpatialMovement();
+        spatialController?.NotifySignificantAction();
         ClearRiposteWindow();
         float startup = startupDurationOverride >= 0f
             ? startupDurationOverride
@@ -251,15 +298,31 @@ public class FighterCombat : MonoBehaviour
 
     public CombatActionResult StartDefense()
     {
+        ClearRefusal();
         if (!CanStartAction())
-            return CombatActionResult.Unavailable;
+            return RefuseUnavailable();
 
         if (CurrentState != FighterCombatState.Idle)
-            return CombatActionResult.Busy;
+        {
+            return Refuse(
+                CombatActionResult.Busy,
+                CombatRefusalReason.Busy
+            );
+        }
+
+        if (!CanDefendFromCurrentOrientation())
+            return CombatActionResult.Unavailable;
 
         if (!fighterStats.SpendStamina(defenseStaminaCost))
-            return CombatActionResult.NotEnoughStamina;
+        {
+            return Refuse(
+                CombatActionResult.NotEnoughStamina,
+                CombatRefusalReason.NotEnoughStamina
+            );
+        }
 
+        StopSpatialMovement();
+        spatialController?.NotifySignificantAction();
         ClearRiposteWindow();
         heldGuardActive = false;
         defenseStartedAt = Time.time;
@@ -270,12 +333,23 @@ public class FighterCombat : MonoBehaviour
 
     public CombatActionResult StartHeldGuard()
     {
+        ClearRefusal();
         if (!CanStartAction())
-            return CombatActionResult.Unavailable;
+            return RefuseUnavailable();
 
         if (CurrentState != FighterCombatState.Idle)
-            return CombatActionResult.Busy;
+        {
+            return Refuse(
+                CombatActionResult.Busy,
+                CombatRefusalReason.Busy
+            );
+        }
 
+        if (!CanDefendFromCurrentOrientation())
+            return CombatActionResult.Unavailable;
+
+        StopSpatialMovement();
+        spatialController?.NotifySignificantAction();
         ClearRiposteWindow();
         heldGuardActive = true;
         defenseStartedAt = Time.time;
@@ -295,15 +369,23 @@ public class FighterCombat : MonoBehaviour
 
     public CombatActionResult StartCharge()
     {
+        ClearRefusal();
         if (!CanStartAction())
-            return CombatActionResult.Unavailable;
+            return RefuseUnavailable();
 
         if (CurrentState == FighterCombatState.Charging)
             return CombatActionResult.Started;
 
         if (CurrentState != FighterCombatState.Idle)
-            return CombatActionResult.Busy;
+        {
+            return Refuse(
+                CombatActionResult.Busy,
+                CombatRefusalReason.Busy
+            );
+        }
 
+        StopSpatialMovement();
+        spatialController?.NotifySignificantAction();
         ClearRiposteWindow();
         chargeHoldTime = 0f;
         SetState(FighterCombatState.Charging);
@@ -319,19 +401,121 @@ public class FighterCombat : MonoBehaviour
 
     public CombatActionResult DodgeLeft()
     {
-        return StartDodge(-1f);
+        return StartDodge(DodgeDirection.Left);
     }
 
     public CombatActionResult DodgeRight()
     {
-        return StartDodge(1f);
+        return StartDodge(DodgeDirection.Right);
+    }
+
+    public CombatActionResult StartSpatialMovement(
+        SpatialMovementType movement)
+    {
+        ClearRefusal();
+        if (!CanStartAction())
+            return RefuseUnavailable();
+
+        if (CurrentState != FighterCombatState.Idle)
+        {
+            return Refuse(
+                CombatActionResult.Busy,
+                CombatRefusalReason.Busy
+            );
+        }
+
+        if (spatialController == null ||
+            !spatialController.StartMovement(this, movement))
+        {
+            return Refuse(
+                CombatActionResult.Unavailable,
+                CombatRefusalReason.IncompatibleOrientation
+            );
+        }
+
+        spatialController.NotifySignificantAction();
+        return CombatActionResult.Started;
+    }
+
+    public void StopSpatialMovement()
+    {
+        spatialController?.StopMovement(this);
+    }
+
+    public CombatActionResult TryPermutation(long commandToken)
+    {
+        ClearRefusal();
+        if (!combatEnabled)
+            return RefuseUnavailable();
+        if (IsDead)
+        {
+            return Refuse(
+                CombatActionResult.Unavailable,
+                CombatRefusalReason.Dead
+            );
+        }
+        if (CurrentState == FighterCombatState.Stunned)
+        {
+            return Refuse(
+                CombatActionResult.Unavailable,
+                CombatRefusalReason.Stunned
+            );
+        }
+        if (commandToken <= 0 ||
+            commandToken <= lastPermutationToken)
+        {
+            return Refuse(
+                CombatActionResult.Unavailable,
+                CombatRefusalReason.DuplicateCommand
+            );
+        }
+        if (spatialController == null ||
+            !spatialController.CanApplyPermutation)
+        {
+            return Refuse(
+                CombatActionResult.Unavailable,
+                CombatRefusalReason.CombatUnavailable
+            );
+        }
+
+        lastPermutationToken = commandToken;
+        float staminaCost =
+            Rules.ResolvePermutationStaminaCost();
+        if (!fighterStats.SpendStamina(staminaCost))
+        {
+            return Refuse(
+                CombatActionResult.NotEnoughStamina,
+                CombatRefusalReason.NotEnoughStamina
+            );
+        }
+
+        incomingImpactRevision++;
+        InterruptForPermutation();
+        if (!spatialController.ApplyPermutation(this))
+        {
+            fighterStats.RecoverStamina(staminaCost);
+            return Refuse(
+                CombatActionResult.Unavailable,
+                CombatRefusalReason.CombatUnavailable
+            );
+        }
+
+        spatialController.NotifySignificantAction();
+        ForceState(FighterCombatState.Idle);
+        return CombatActionResult.Started;
     }
 
     public void SetCombatEnabled(bool enabled)
     {
+        if (combatEnabled == enabled)
+            return;
+
         combatEnabled = enabled;
         if (!enabled)
-            CancelActiveActions(true);
+        {
+            incomingImpactRevision++;
+            CancelActiveActions(false);
+        }
     }
 
     public void SetCombatRules(CombatRulesConfig rules)
@@ -342,8 +526,52 @@ public class FighterCombat : MonoBehaviour
                 : CombatRulesConfig.RuntimeDefault;
     }
 
+    public void SetSpatialController(
+        CombatSpatialController controller)
+    {
+        if (spatialController != null)
+        {
+            spatialController.OnDodgeCancelled -=
+                HandleSpatialDodgeCancelled;
+        }
+
+        spatialController = controller;
+        if (spatialController != null)
+        {
+            spatialController.OnDodgeCancelled +=
+                HandleSpatialDodgeCancelled;
+        }
+    }
+
     public void ResetCombatState()
     {
+        bool transformNeedsReset =
+            spatialController == null &&
+            ((transform.position - initialPosition).sqrMagnitude >
+                 0.000001f ||
+             Quaternion.Angle(
+                 transform.rotation,
+                 initialRotation
+             ) > 0.01f);
+        bool alreadyReset =
+            combatEnabled &&
+            CurrentState == FighterCombatState.Idle &&
+            CurrentStunReason == FighterStunReason.None &&
+            StunRemaining <= 0f &&
+            !heldGuardActive &&
+            Mathf.Approximately(chargeHoldTime, 0f) &&
+            simpleDefenseRoutine == null &&
+            !hasActiveSpatialDodge &&
+            float.IsNegativeInfinity(defenseStartedAt) &&
+            float.IsNegativeInfinity(dodgeStartedAt) &&
+            float.IsNegativeInfinity(riposteWindowEndsAt) &&
+            lastPermutationToken == long.MinValue &&
+            LastRefusalReason == CombatRefusalReason.None &&
+            !transformNeedsReset;
+        if (alreadyReset)
+            return;
+
+        CancelPendingDodge();
         StopAllCoroutines();
         simpleDefenseRoutine = null;
         combatEnabled = true;
@@ -353,16 +581,24 @@ public class FighterCombat : MonoBehaviour
         StunRemaining = 0f;
         defenseStartedAt = float.NegativeInfinity;
         dodgeStartedAt = float.NegativeInfinity;
+        incomingImpactRevision++;
+        lastPermutationToken = long.MinValue;
+        LastRefusalReason = CombatRefusalReason.None;
         ClearRiposteWindow();
-        transform.SetPositionAndRotation(
-            initialPosition,
-            initialRotation
-        );
-        ForceState(FighterCombatState.Idle);
+        if (spatialController == null)
+        {
+            transform.SetPositionAndRotation(
+                initialPosition,
+                initialRotation
+            );
+        }
+        if (CurrentState != FighterCombatState.Idle)
+            ForceState(FighterCombatState.Idle);
     }
 
     public void CancelActiveActions(bool restoreNeutralTransform)
     {
+        CancelPendingDodge();
         StopAllCoroutines();
         simpleDefenseRoutine = null;
         heldGuardActive = false;
@@ -372,8 +608,13 @@ public class FighterCombat : MonoBehaviour
         defenseStartedAt = float.NegativeInfinity;
         dodgeStartedAt = float.NegativeInfinity;
         ClearRiposteWindow();
+        StopSpatialMovement();
 
-        if (restoreNeutralTransform)
+        if (spatialController != null)
+        {
+            spatialController.RestoreNeutralPose(this);
+        }
+        else if (restoreNeutralTransform)
         {
             transform.SetPositionAndRotation(
                 initialPosition,
@@ -392,12 +633,10 @@ public class FighterCombat : MonoBehaviour
     {
         SetState(FighterCombatState.AttackStartup);
 
-        Vector3 startPosition = initialPosition;
-        Vector3 attackPosition = Vector3.MoveTowards(
-            startPosition,
-            targetStats.transform.position,
-            1f
-        );
+        int expectedTargetImpactRevision =
+            targetCombat != null
+                ? targetCombat.IncomingImpactRevision
+                : 0;
 
         float safeStartup = Mathf.Max(0f, startupDuration);
         float lungeDuration = Mathf.Min(
@@ -412,35 +651,45 @@ public class FighterCombat : MonoBehaviour
 
         if (lungeDuration > 0f)
         {
-            yield return MoveBetween(
-                startPosition,
-                attackPosition,
-                lungeDuration
+            yield return MoveAttackTowardTarget(
+                lungeDuration,
+                expectedTargetImpactRevision
             );
         }
-        else
+        else if (!HasTargetImpactRevisionChanged(
+                     expectedTargetImpactRevision))
         {
-            transform.position = attackPosition;
+            transform.position =
+                GetNeutralPosition() +
+                GetCurrentAttackOffset();
         }
 
         SetState(FighterCombatState.Attacking);
         float impactTime = Time.time;
-        CombatHitResult hitResult = ResolveAttack(impactTime);
+        CombatHitResult hitResult = ResolveAttack(
+            impactTime,
+            expectedTargetImpactRevision,
+            out RelativeOrientation orientation,
+            out float positionalMultiplier,
+            out float damageApplied
+        );
         OnAttackResolved?.Invoke(
             new CombatImpact(
                 this,
                 targetCombat,
                 hitResult,
-                impactTime
+                impactTime,
+                orientation,
+                positionalMultiplier,
+                damageApplied
             )
         );
 
-        yield return MoveBetween(
-            transform.position,
-            initialPosition,
-            attackReturnDuration
+        yield return ReturnAttackToNeutral(
+            attackReturnDuration,
+            expectedTargetImpactRevision
         );
-        transform.position = initialPosition;
+        RestoreNeutralPose();
 
         float stunDuration = hitResult switch
         {
@@ -470,21 +719,67 @@ public class FighterCombat : MonoBehaviour
         SetIdleIfAvailable();
     }
 
-    private CombatHitResult ResolveAttack(float impactTime)
+    private CombatHitResult ResolveAttack(
+        float impactTime,
+        int expectedTargetImpactRevision,
+        out RelativeOrientation orientation,
+        out float positionalMultiplier,
+        out float damageApplied)
     {
-        if (targetCombat != null)
-            return targetCombat.ResolveIncomingAttack(
-                impactTime,
-                lightAttackDamage
-            );
+        orientation = spatialController != null &&
+            targetCombat != null
+                ? spatialController.GetAttackOrientation(
+                    this,
+                    targetCombat
+                )
+                : RelativeOrientation.Face;
+        float finalDamage = orientation switch
+        {
+            RelativeOrientation.LeftFlank =>
+                Rules.ResolveFlankDamage(lightAttackDamage),
+            RelativeOrientation.RightFlank =>
+                Rules.ResolveFlankDamage(lightAttackDamage),
+            RelativeOrientation.Back =>
+                Rules.ResolveBackDamage(lightAttackDamage),
+            _ => CombatRulesConfig.ResolvePositionalDamage(
+                lightAttackDamage,
+                1f
+            )
+        };
+        positionalMultiplier =
+            lightAttackDamage > Mathf.Epsilon
+                ? finalDamage / lightAttackDamage
+                : 1f;
+        damageApplied = 0f;
 
-        targetStats.TakeDamage(lightAttackDamage);
+        if (targetCombat != null)
+        {
+            if (targetCombat.IncomingImpactRevision !=
+                expectedTargetImpactRevision)
+            {
+                return CombatHitResult.Interrupted;
+            }
+
+            CombatHitResult result =
+                targetCombat.ResolveIncomingAttack(
+                impactTime,
+                finalDamage,
+                orientation
+            );
+            if (result == CombatHitResult.Hit)
+                damageApplied = finalDamage;
+            return result;
+        }
+
+        targetStats.TakeDamage(finalDamage);
+        damageApplied = finalDamage;
         return CombatHitResult.Hit;
     }
 
     private CombatHitResult ResolveIncomingAttack(
         float impactTime,
-        float incomingDamage)
+        float incomingDamage,
+        RelativeOrientation incomingOrientation)
     {
         if (CurrentState == FighterCombatState.Dodging)
         {
@@ -501,7 +796,18 @@ public class FighterCombat : MonoBehaviour
             return CombatHitResult.Dodged;
         }
 
-        if (CurrentState == FighterCombatState.Defending)
+        if (hasActiveSpatialDodge)
+        {
+            CancelPendingDodge();
+            StopAllCoroutines();
+            simpleDefenseRoutine = null;
+            ForceState(FighterCombatState.Idle);
+        }
+
+        bool defenseAllowed =
+            incomingOrientation == RelativeOrientation.Face;
+        if (CurrentState == FighterCombatState.Defending &&
+            defenseAllowed)
         {
             bool isPerfect =
                 !heldGuardActive &&
@@ -529,7 +835,21 @@ public class FighterCombat : MonoBehaviour
             return CombatHitResult.Blocked;
         }
 
+        if (CurrentState == FighterCombatState.Defending)
+        {
+            heldGuardActive = false;
+            defenseStartedAt = float.NegativeInfinity;
+            if (simpleDefenseRoutine != null)
+            {
+                StopCoroutine(simpleDefenseRoutine);
+                simpleDefenseRoutine = null;
+            }
+            ForceState(FighterCombatState.Idle);
+        }
+
+        StopSpatialMovement();
         fighterStats.TakeDamage(incomingDamage);
+        spatialController?.NotifySignificantAction();
         return CombatHitResult.Hit;
     }
 
@@ -604,6 +924,9 @@ public class FighterCombat : MonoBehaviour
             return;
         }
 
+        StopSpatialMovement();
+        CancelPendingDodge();
+        incomingImpactRevision++;
         StopAllCoroutines();
         simpleDefenseRoutine = null;
         heldGuardActive = false;
@@ -694,47 +1017,116 @@ public class FighterCombat : MonoBehaviour
         );
     }
 
-    private CombatActionResult StartDodge(float direction)
+    private CombatActionResult StartDodge(
+        DodgeDirection direction)
     {
+        ClearRefusal();
         if (!CanStartAction())
-            return CombatActionResult.Unavailable;
+            return RefuseUnavailable();
 
         if (CurrentState != FighterCombatState.Idle)
-            return CombatActionResult.Busy;
+        {
+            return Refuse(
+                CombatActionResult.Busy,
+                CombatRefusalReason.Busy
+            );
+        }
+
+        if (fighterStats.CurrentStamina + Mathf.Epsilon <
+            dodgeStaminaCost)
+        {
+            return Refuse(
+                CombatActionResult.NotEnoughStamina,
+                CombatRefusalReason.NotEnoughStamina
+            );
+        }
+
+        SpatialDodgeTransaction preparedDodge = default;
+        if (spatialController != null &&
+            !spatialController.TryPrepareDodge(
+                this,
+                direction,
+                out preparedDodge
+            ))
+        {
+            return Refuse(
+                CombatActionResult.Unavailable,
+                CombatRefusalReason.IncompatibleOrientation
+            );
+        }
 
         if (!fighterStats.SpendStamina(dodgeStaminaCost))
-            return CombatActionResult.NotEnoughStamina;
+        {
+            if (preparedDodge.IsValid)
+                spatialController.CancelDodge(preparedDodge);
+            return Refuse(
+                CombatActionResult.NotEnoughStamina,
+                CombatRefusalReason.NotEnoughStamina
+            );
+        }
 
+        StopSpatialMovement();
+        spatialController?.NotifySignificantAction();
         ClearRiposteWindow();
         dodgeStartedAt = Time.time;
+        activeSpatialDodge = preparedDodge;
+        hasActiveSpatialDodge = preparedDodge.IsValid;
         StartCoroutine(DodgeRoutine(direction));
         return CombatActionResult.Started;
     }
 
-    private IEnumerator DodgeRoutine(float direction)
+    private IEnumerator DodgeRoutine(
+        DodgeDirection direction)
     {
         SetState(FighterCombatState.Dodging);
 
-        Vector3 startPosition = initialPosition;
-        Vector3 sideDirection = transform.right * direction;
-        Vector3 dodgePosition =
-            startPosition + sideDirection * dodgeDistance;
+        float movementDuration = spatialController != null &&
+            hasActiveSpatialDodge
+                ? ResolveSpatialDodgeDuration(
+                    activeSpatialDodge
+                )
+                : Mathf.Max(0.01f, dodgeMovementDuration);
 
-        float movementDuration =
-            Mathf.Max(0.01f, dodgeMovementDuration);
-        float halfDuration = movementDuration * 0.5f;
-
-        yield return MoveBetween(
-            startPosition,
-            dodgePosition,
-            halfDuration
-        );
-        yield return MoveBetween(
-            dodgePosition,
-            startPosition,
-            halfDuration
-        );
-        transform.position = initialPosition;
+        if (hasActiveSpatialDodge)
+        {
+            float elapsed = 0f;
+            while (elapsed < movementDuration)
+            {
+                elapsed += Time.deltaTime;
+                spatialController.PreviewPreparedDodge(
+                    activeSpatialDodge.Id,
+                    Mathf.Clamp01(
+                        elapsed / movementDuration
+                    )
+                );
+                yield return null;
+            }
+        }
+        else
+        {
+            Vector3 startPosition = transform.position;
+            float signedDirection =
+                direction == DodgeDirection.Left
+                    ? -1f
+                    : 1f;
+            Vector3 sideDirection =
+                transform.right * signedDirection;
+            Vector3 dodgePosition =
+                startPosition +
+                sideDirection * dodgeDistance;
+            float halfDuration = movementDuration * 0.5f;
+            yield return MoveBetween(
+                startPosition,
+                dodgePosition,
+                halfDuration
+            );
+            yield return MoveBetween(
+                dodgePosition,
+                startPosition,
+                halfDuration
+            );
+            transform.position = startPosition;
+        }
 
         float remainingActiveTime =
             Mathf.Max(0f, dodgeActiveDuration - movementDuration);
@@ -747,7 +1139,135 @@ public class FighterCombat : MonoBehaviour
                 dodgeRecoveryDuration
             );
 
+        if (hasActiveSpatialDodge)
+        {
+            spatialController.CommitDodge(activeSpatialDodge);
+            hasActiveSpatialDodge = false;
+            activeSpatialDodge = default;
+        }
+
         SetIdleIfAvailable();
+    }
+
+    private IEnumerator MoveAttackTowardTarget(
+        float duration,
+        int expectedTargetImpactRevision)
+    {
+        float elapsed = 0f;
+        float safeDuration = Mathf.Max(0.01f, duration);
+
+        while (elapsed < safeDuration)
+        {
+            if (HasTargetImpactRevisionChanged(
+                    expectedTargetImpactRevision))
+            {
+                RestoreNeutralPose();
+                yield break;
+            }
+
+            elapsed += Time.deltaTime;
+            float progress =
+                Mathf.Clamp01(elapsed / safeDuration);
+            transform.position =
+                GetNeutralPosition() +
+                GetCurrentAttackOffset() * progress;
+            yield return null;
+        }
+    }
+
+    private IEnumerator ReturnAttackToNeutral(
+        float duration,
+        int expectedTargetImpactRevision)
+    {
+        Vector3 initialOffset =
+            transform.position - GetNeutralPosition();
+        float elapsed = 0f;
+        float safeDuration = Mathf.Max(0.01f, duration);
+
+        while (elapsed < safeDuration)
+        {
+            if (HasTargetImpactRevisionChanged(
+                    expectedTargetImpactRevision))
+            {
+                RestoreNeutralPose();
+                yield break;
+            }
+
+            elapsed += Time.deltaTime;
+            transform.position =
+                GetNeutralPosition() +
+                Vector3.Lerp(
+                    initialOffset,
+                    Vector3.zero,
+                    Mathf.Clamp01(elapsed / safeDuration)
+                );
+            yield return null;
+        }
+    }
+
+    private Vector3 GetCurrentAttackOffset()
+    {
+        Vector3 neutralPosition = GetNeutralPosition();
+        Vector3 targetPosition =
+            targetStats != null
+                ? targetStats.transform.position
+                : neutralPosition;
+
+        if (spatialController != null &&
+            targetCombat != null &&
+            spatialController.TryGetNeutralPosition(
+                targetCombat,
+                out Vector3 targetNeutralPosition
+            ))
+        {
+            targetPosition = targetNeutralPosition;
+        }
+
+        return Vector3.MoveTowards(
+            neutralPosition,
+            targetPosition,
+            1f
+        ) - neutralPosition;
+    }
+
+    private bool HasTargetImpactRevisionChanged(
+        int expectedTargetImpactRevision)
+    {
+        return targetCombat != null &&
+               targetCombat.IncomingImpactRevision !=
+               expectedTargetImpactRevision;
+    }
+
+    private float ResolveSpatialDodgeDuration(
+        SpatialDodgeTransaction transaction)
+    {
+        float travelDistance = Mathf.Max(
+            Vector3.Distance(
+                transaction.FirstStartPose.position,
+                transaction.FirstEndPose.position
+            ),
+            Vector3.Distance(
+                transaction.SecondStartPose.position,
+                transaction.SecondEndPose.position
+            )
+        );
+        float rotationAngle = Mathf.Max(
+            Quaternion.Angle(
+                transaction.FirstStartPose.rotation,
+                transaction.FirstEndPose.rotation
+            ),
+            Quaternion.Angle(
+                transaction.SecondStartPose.rotation,
+                transaction.SecondEndPose.rotation
+            )
+        );
+
+        return Mathf.Max(
+            Rules.DodgeSpatialDuration,
+            travelDistance / Rules.DodgeSpatialSpeed,
+            rotationAngle / Rules.RotationSpeed,
+            0.01f
+        );
     }
 
     private IEnumerator MoveBetween(
@@ -780,7 +1300,8 @@ public class FighterCombat : MonoBehaviour
     private void HandleDeath(FighterStats deadStats)
     {
         combatEnabled = false;
-        CancelActiveActions(true);
+        incomingImpactRevision++;
+        CancelActiveActions(false);
         ForceState(FighterCombatState.Dead);
     }
 
@@ -796,12 +1317,147 @@ public class FighterCombat : MonoBehaviour
             return;
 
         CurrentState = state;
+        if (state != FighterCombatState.Idle)
+            StopSpatialMovement();
+        spatialController?.NotifySignificantAction();
         OnStateChanged?.Invoke(this, state);
     }
 
     private void ForceState(FighterCombatState state)
     {
+        if (CurrentState == state)
+            return;
+
         CurrentState = state;
+        if (state != FighterCombatState.Idle)
+            StopSpatialMovement();
+        spatialController?.NotifySignificantAction();
         OnStateChanged?.Invoke(this, state);
+    }
+
+    private bool CanDefendFromCurrentOrientation()
+    {
+        if (spatialController == null ||
+            targetCombat == null)
+        {
+            return true;
+        }
+
+        RelativeOrientation orientation =
+            spatialController.GetAttackOrientation(
+                targetCombat,
+                this
+            );
+        if (orientation == RelativeOrientation.Face)
+            return true;
+
+        LastRefusalReason =
+            orientation == RelativeOrientation.Back
+                ? CombatRefusalReason.BackGuardForbidden
+                : CombatRefusalReason.FlankGuardForbidden;
+        return false;
+    }
+
+    private void InterruptForPermutation()
+    {
+        CancelPendingDodge();
+        StopAllCoroutines();
+        simpleDefenseRoutine = null;
+        heldGuardActive = false;
+        chargeHoldTime = 0f;
+        defenseStartedAt = float.NegativeInfinity;
+        dodgeStartedAt = float.NegativeInfinity;
+        ClearRiposteWindow();
+        StopSpatialMovement();
+    }
+
+    private void CancelPendingDodge()
+    {
+        if (!hasActiveSpatialDodge)
+            return;
+
+        spatialController?.CancelDodge(activeSpatialDodge);
+        hasActiveSpatialDodge = false;
+        activeSpatialDodge = default;
+    }
+
+    private void HandleSpatialDodgeCancelled(
+        SpatialDodgeTransaction transaction)
+    {
+        if (!hasActiveSpatialDodge ||
+            transaction.Fighter != this ||
+            transaction.Id != activeSpatialDodge.Id)
+        {
+            return;
+        }
+
+        StopAllCoroutines();
+        simpleDefenseRoutine = null;
+        heldGuardActive = false;
+        chargeHoldTime = 0f;
+        dodgeStartedAt = float.NegativeInfinity;
+        hasActiveSpatialDodge = false;
+        activeSpatialDodge = default;
+
+        if (combatEnabled &&
+            !IsDead &&
+            CurrentState != FighterCombatState.Stunned)
+        {
+            ForceState(FighterCombatState.Idle);
+        }
+    }
+
+    private Vector3 GetNeutralPosition()
+    {
+        if (spatialController != null &&
+            spatialController.TryGetNeutralPosition(
+                this,
+                out Vector3 neutralPosition
+            ))
+        {
+            return neutralPosition;
+        }
+
+        return initialPosition;
+    }
+
+    private void RestoreNeutralPose()
+    {
+        if (spatialController != null)
+        {
+            spatialController.RestoreNeutralPose(this);
+            return;
+        }
+
+        transform.SetPositionAndRotation(
+            initialPosition,
+            initialRotation
+        );
+    }
+
+    private void ClearRefusal()
+    {
+        LastRefusalReason = CombatRefusalReason.None;
+    }
+
+    private CombatActionResult Refuse(
+        CombatActionResult result,
+        CombatRefusalReason reason)
+    {
+        LastRefusalReason = reason;
+        return result;
+    }
+
+    private CombatActionResult RefuseUnavailable()
+    {
+        CombatRefusalReason reason = IsDead
+            ? CombatRefusalReason.Dead
+            : CurrentState == FighterCombatState.Stunned
+                ? CombatRefusalReason.Stunned
+                : CombatRefusalReason.CombatUnavailable;
+        return Refuse(
+            CombatActionResult.Unavailable,
+            reason
+        );
     }
 }

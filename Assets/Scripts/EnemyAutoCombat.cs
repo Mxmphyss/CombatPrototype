@@ -25,10 +25,14 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     private FighterCombat enemy;
     private FighterCombat player;
     private CombatHUD hud;
+    private CombatSpatialController spatialController;
     private Coroutine combatRoutine;
+    private Coroutine compensationRoutine;
     private Vector3 normalScale;
     private bool initialized;
     private bool appliedAIEnabled = true;
+    private int routineGeneration;
+    private long nextPermutationToken;
 
     public event Action<bool> OnAIEnabledChanged;
 
@@ -37,16 +41,20 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     public void Initialize(
         FighterCombat enemyCombat,
         FighterCombat playerCombat,
-        CombatHUD combatHud)
+        CombatHUD combatHud,
+        CombatSpatialController spatialAuthority = null)
     {
+        UnsubscribeSpatialEvents();
         StopAI();
 
         enemy = enemyCombat;
         player = playerCombat;
         hud = combatHud;
+        spatialController = spatialAuthority;
         normalScale = transform.localScale;
         initialized = true;
         appliedAIEnabled = enemyAIEnabled;
+        SubscribeSpatialEvents();
 
         StartAI();
     }
@@ -60,6 +68,11 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     private void OnDisable()
     {
         StopAI();
+    }
+
+    private void OnDestroy()
+    {
+        UnsubscribeSpatialEvents();
     }
 
     public void StartAI()
@@ -77,16 +90,29 @@ public sealed class EnemyAutoCombat : MonoBehaviour
 
     public void StopAI()
     {
+        routineGeneration++;
+
         if (combatRoutine != null)
         {
             StopCoroutine(combatRoutine);
             combatRoutine = null;
         }
 
+        if (compensationRoutine != null)
+        {
+            StopCoroutine(compensationRoutine);
+            compensationRoutine = null;
+        }
+
         if (enemy != null)
+        {
             enemy.StopChargeInput();
+            enemy.StopSpatialMovement();
+        }
 
         RestoreScale();
+        if (hud != null)
+            hud.SetEnemyStatus(string.Empty);
     }
 
     public void RestartAI()
@@ -103,11 +129,12 @@ public sealed class EnemyAutoCombat : MonoBehaviour
 
     private IEnumerator CombatLoop()
     {
+        int generation = routineGeneration;
         while (CanContinue())
         {
             yield return WaitUntilAIEnabled();
 
-            if (!CanAct())
+            if (!CanAct() || generation != routineGeneration)
             {
                 yield return null;
                 continue;
@@ -119,14 +146,24 @@ public sealed class EnemyAutoCombat : MonoBehaviour
             );
             yield return WaitWhileCombatContinues(delay);
 
-            if (!CanAct())
+            if (!CanAct() || generation != routineGeneration)
                 continue;
 
             while (enemy.IsBusy && CanContinue())
                 yield return null;
 
-            if (!CanAct())
+            if (!CanAct() || generation != routineGeneration)
                 continue;
+
+            if (TryUseConfiguredPermutation())
+            {
+                yield return new WaitForSeconds(
+                    enemy.Rules.PermutationFeedbackDuration
+                );
+                if (CanAct())
+                    hud.SetEnemyStatus(string.Empty);
+                continue;
+            }
 
             if (enemy.Stats.CurrentStamina + Mathf.Epsilon <
                 enemy.LightAttackStaminaCost)
@@ -134,7 +171,7 @@ public sealed class EnemyAutoCombat : MonoBehaviour
                 yield return RechargeUntilAttackIsAvailable();
             }
 
-            if (!CanAct())
+            if (!CanAct() || generation != routineGeneration)
                 continue;
 
             CombatActionResult result =
@@ -167,7 +204,8 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         }
 
         RestoreScale();
-        combatRoutine = null;
+        if (generation == routineGeneration)
+            combatRoutine = null;
     }
 
     private IEnumerator PulseDuringStartup()
@@ -264,8 +302,48 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     {
         return enemyAIEnabled &&
                CanContinue() &&
+               !enemy.IsDead &&
                enemy.CurrentState !=
-               FighterCombatState.Stunned;
+               FighterCombatState.Stunned &&
+               enemy.CurrentState !=
+               FighterCombatState.Dead;
+    }
+
+    private bool TryUseConfiguredPermutation()
+    {
+        if (!enemy.Rules.AiPermutationEnabled ||
+            spatialController == null ||
+            enemy.Stats.CurrentStamina + Mathf.Epsilon <
+                enemy.Rules.ResolvePermutationStaminaCost())
+        {
+            return false;
+        }
+
+        CombatSpatialSnapshot snapshot =
+            spatialController.Snapshot;
+        if (snapshot.Orientation != RelativeOrientation.Back ||
+            snapshot.AdvantageFighter != player)
+        {
+            return false;
+        }
+
+        if (nextPermutationToken < long.MaxValue)
+            nextPermutationToken++;
+        if (nextPermutationToken <= 0)
+            nextPermutationToken = 1;
+
+        CombatActionResult result =
+            enemy.TryPermutation(nextPermutationToken);
+        if (result != CombatActionResult.Started)
+            return false;
+
+        hud.SetEnemyStatus("Permutation");
+        hud.ShowMessage(
+            "Permutation ennemie",
+            new Color(0.78f, 0.66f, 0.25f),
+            enemy.Rules.PermutationFeedbackDuration
+        );
+        return true;
     }
 
     private void ApplyAIEnabledState()
@@ -276,6 +354,8 @@ public sealed class EnemyAutoCombat : MonoBehaviour
 
         if (enemyAIEnabled)
             StartAI();
+        else
+            StopAI();
 
         if (changed)
             OnAIEnabledChanged?.Invoke(enemyAIEnabled);
@@ -285,5 +365,113 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     {
         if (normalScale != Vector3.zero)
             transform.localScale = normalScale;
+    }
+
+    private void SubscribeSpatialEvents()
+    {
+        if (spatialController != null)
+        {
+            spatialController.OnDodgeCommitted +=
+                HandleDodgeCommitted;
+        }
+    }
+
+    private void UnsubscribeSpatialEvents()
+    {
+        if (spatialController != null)
+        {
+            spatialController.OnDodgeCommitted -=
+                HandleDodgeCommitted;
+        }
+    }
+
+    private void HandleDodgeCommitted(
+        SpatialDodgeTransaction transaction)
+    {
+        if (!CanAct() ||
+            spatialController == null ||
+            transaction.Fighter != player ||
+            !enemy.Rules.AiCompensationEnabled)
+        {
+            return;
+        }
+
+        CombatSpatialSnapshot snapshot =
+            spatialController.Snapshot;
+        bool playerHasFlank =
+            snapshot.AdvantageFighter == player &&
+            (snapshot.Orientation ==
+                RelativeOrientation.LeftFlank ||
+             snapshot.Orientation ==
+                RelativeOrientation.RightFlank);
+        if (!playerHasFlank ||
+            UnityEngine.Random.value >
+                enemy.Rules.AiCompensationProbability)
+        {
+            return;
+        }
+
+        if (compensationRoutine != null)
+            StopCoroutine(compensationRoutine);
+
+        compensationRoutine = StartCoroutine(
+            CompensationRoutine(
+                transaction.Direction,
+                snapshot.Epoch,
+                snapshot.Revision,
+                snapshot.Orientation,
+                snapshot.AdvantageFighter
+            )
+        );
+    }
+
+    private IEnumerator CompensationRoutine(
+        DodgeDirection direction,
+        long expectedEpoch,
+        int expectedRevision,
+        RelativeOrientation expectedOrientation,
+        FighterCombat expectedAdvantage)
+    {
+        int generation = routineGeneration;
+        float delay = UnityEngine.Random.Range(
+            enemy.Rules.AiCompensationMinDelay,
+            enemy.Rules.AiCompensationMaxDelay
+        );
+        float elapsed = 0f;
+
+        while (elapsed < delay &&
+               generation == routineGeneration &&
+               CanAct())
+        {
+            elapsed += Time.deltaTime;
+            yield return null;
+        }
+
+        CombatSpatialSnapshot currentSnapshot =
+            spatialController != null
+                ? spatialController.Snapshot
+                : default;
+        bool spatialStateIsStillCurrent =
+            spatialController != null &&
+            currentSnapshot.Epoch == expectedEpoch &&
+            currentSnapshot.Revision == expectedRevision &&
+            currentSnapshot.Orientation ==
+                expectedOrientation &&
+            currentSnapshot.AdvantageFighter ==
+                expectedAdvantage;
+        if (generation == routineGeneration &&
+            CanAct() &&
+            spatialStateIsStillCurrent)
+        {
+            CombatActionResult result =
+                direction == DodgeDirection.Left
+                    ? enemy.DodgeLeft()
+                    : enemy.DodgeRight();
+            if (result == CombatActionResult.Started)
+                hud.SetEnemyStatus("Esquive");
+        }
+
+        if (generation == routineGeneration)
+            compensationRoutine = null;
     }
 }

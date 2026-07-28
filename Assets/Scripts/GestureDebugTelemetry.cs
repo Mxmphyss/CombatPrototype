@@ -21,6 +21,7 @@ public readonly struct GestureDebugEventData
     public bool IsActionMapped { get; }
     public bool HasCombatResult { get; }
     public CombatActionResult CombatResult { get; }
+    public CombatRefusalReason RefusalReason { get; }
     public string ActionLabel { get; }
     public string CommandName => ActionLabel;
 
@@ -33,7 +34,9 @@ public readonly struct GestureDebugEventData
         bool isActionMapped,
         bool hasCombatResult,
         CombatActionResult combatResult,
-        string actionLabel)
+        string actionLabel,
+        CombatRefusalReason refusalReason =
+            CombatRefusalReason.None)
     {
         Phase = phase;
         InputKind = inputKind;
@@ -43,6 +46,7 @@ public readonly struct GestureDebugEventData
         IsActionMapped = isActionMapped;
         HasCombatResult = hasCombatResult;
         CombatResult = combatResult;
+        RefusalReason = refusalReason;
         ActionLabel = actionLabel ?? string.Empty;
     }
 

@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
-using UnityEngine.InputSystem;
 using UnityEngine.UI;
 
 public sealed class CombatGestureGrid :
@@ -16,6 +15,15 @@ public sealed class CombatGestureGrid :
     private const int GridSize = 3;
     private const int MiddleDefenseZone = 4;
     private const int MiddleMovementZone = 7;
+    private const int LeftMovementZone = 6;
+    private const int RightMovementZone = 8;
+    private const int ContextMovementZone = 9;
+    private static readonly Vector2 ContextZoneCenter =
+        new(0.5f, 0.055f);
+    private static readonly Vector2 ContextZoneHalfExtents =
+        new(0.09f, 0.055f);
+    private static readonly int[] PermutationZones =
+        { LeftMovementZone, MiddleDefenseZone, RightMovementZone };
 
     [Header("Couleurs des categories")]
     [SerializeField]
@@ -98,7 +106,7 @@ public sealed class CombatGestureGrid :
     private float recognitionFeedbackDuration = 0.22f;
 
     private readonly List<Image> points =
-        new(GridSize * GridSize);
+        new(GridSize * GridSize + 1);
     private readonly List<Vector2> traceLocalSamples = new(256);
     private readonly List<TimedGestureSample>
         normalizedSamples = new(256);
@@ -109,22 +117,33 @@ public sealed class CombatGestureGrid :
     private CombatGestureCommandRouter commandRouter;
     private HybridGestureRecognizer gestureRecognizer;
     private GestureRibbonGraphic ribbon;
-    private Camera activeEventCamera;
-    private Pointer activePointerDevice;
+    private Image contextPoint;
     private Coroutine recognitionFeedbackRoutine;
     private int activePointerId = int.MinValue;
     private int startingZone = -1;
+    private int currentLogicalZone = -1;
     private int activeHoldZone = -1;
+    private int strokeHoldTargetZone = -1;
     private float pointerDownTime;
     private float lastMeaningfulMovementTime;
+    private float strokeHoldStationarySince;
     private float maximumDisplacementSquared;
     private bool inputEnabled = true;
     private bool holdAttempted;
     private bool holdStarted;
+    private bool strokeHoldClaimed;
+    private bool strokeHoldAttempted;
+    private bool strokeHoldStarted;
+    private bool permutationCenterReached;
+    private bool permutationPathInvalid;
+    private bool permutationLatched;
     private bool strokeFollowedByHold;
     private bool hasPointerLocalPosition;
+    private long nextCommandToken;
+    private long activeCommandToken;
     private Vector2 startingNormalizedPosition;
     private Vector2 lastMovementAnchorNormalized;
+    private Vector2 strokeHoldMovementAnchorNormalized;
     private Vector2 currentPointerLocalPosition;
     private Vector2 currentNormalizedPosition;
 
@@ -168,6 +187,12 @@ public sealed class CombatGestureGrid :
         }
     }
 
+    public void ResetForReplay()
+    {
+        CancelPointerAction();
+        CancelRecognitionFeedback();
+    }
+
     private void Initialize(
         FighterCombat player,
         CombatHUD combatHud)
@@ -175,6 +200,8 @@ public sealed class CombatGestureGrid :
         hud = combatHud;
         commandRouter =
             new CombatGestureCommandRouter(player);
+        if (player != null)
+            holdThreshold = player.Rules.MovementHoldDelay;
         gestureRecognizer =
             new HybridGestureRecognizer(
                 recognition,
@@ -201,34 +228,49 @@ public sealed class CombatGestureGrid :
             return;
         }
 
-        UpdateLivePointer();
+        UpdateStrokeHoldRecognition();
         UpdateHoldRecognition();
+        UpdateStrokeHoldState();
     }
 
-    private void UpdateLivePointer()
+    private void UpdateStrokeHoldRecognition()
     {
         if (!inputEnabled ||
-            activePointerId == int.MinValue)
+            activePointerId == int.MinValue ||
+            !strokeHoldClaimed ||
+            strokeHoldAttempted ||
+            !hasPointerLocalPosition ||
+            currentLogicalZone != strokeHoldTargetZone ||
+            strokeHoldStationarySince <= 0f)
+        {
+            if (strokeHoldStarted)
+                PulsePoint(strokeHoldTargetZone);
+            return;
+        }
+
+        if (Time.unscaledTime - strokeHoldStationarySince <
+            holdThreshold)
         {
             return;
         }
 
-        Pointer pointer =
-            activePointerDevice ?? Pointer.current;
-        if (pointer == null)
-            return;
+        strokeHoldAttempted = true;
+        RoutedGestureAction action =
+            commandRouter.BeginStrokeHold(
+                strokeHoldTargetZone
+            );
 
-        Vector2 screenPosition =
-            pointer.position.ReadValue();
-        if (!TryGetPointerLocalPosition(
-                screenPosition,
-                activeEventCamera,
-                out Vector2 localPosition))
-        {
-            return;
-        }
+        strokeHoldStarted =
+            action.IsMapped &&
+            action.CombatResult == CombatActionResult.Started;
+        PresentAction(action);
+        PublishStrokeHoldCompleted(
+            strokeHoldTargetZone,
+            action
+        );
 
-        UpdatePointerPosition(localPosition, false);
+        if (strokeHoldStarted)
+            HighlightPoint(strokeHoldTargetZone, 1f);
     }
 
     private void UpdateHoldRecognition()
@@ -237,6 +279,7 @@ public sealed class CombatGestureGrid :
             activePointerId == int.MinValue ||
             holdAttempted ||
             holdStarted ||
+            strokeHoldClaimed ||
             !hasPointerLocalPosition ||
             maximumDisplacementSquared >
             holdMovementTolerance * holdMovementTolerance)
@@ -308,14 +351,25 @@ public sealed class CombatGestureGrid :
         ClearRecordedGesture();
 
         activePointerId = eventData.pointerId;
-        activeEventCamera = eventData.pressEventCamera;
-        activePointerDevice = Pointer.current;
         pointerDownTime = Time.unscaledTime;
         lastMeaningfulMovementTime = pointerDownTime;
         holdAttempted = false;
         holdStarted = false;
+        strokeHoldClaimed = false;
+        strokeHoldAttempted = false;
+        strokeHoldStarted = false;
+        strokeHoldTargetZone = -1;
+        strokeHoldStationarySince = 0f;
+        permutationCenterReached = false;
+        permutationPathInvalid = false;
+        permutationLatched = false;
         strokeFollowedByHold = false;
         activeHoldZone = -1;
+        if (nextCommandToken < long.MaxValue)
+            nextCommandToken++;
+        if (nextCommandToken <= 0)
+            nextCommandToken = 1;
+        activeCommandToken = nextCommandToken;
 
         if (!TryGetPointerLocalPosition(
                 eventData.position,
@@ -336,6 +390,10 @@ public sealed class CombatGestureGrid :
         startingZone = HybridGestureRecognizer.GetZone(
             startingNormalizedPosition,
             middleOuterOffset
+        );
+        currentLogicalZone = startingZone;
+        SetContextPointVisible(
+            startingZone == MiddleMovementZone
         );
         liveProjectedZones.Clear();
         liveProjectedZones.Add(startingZone);
@@ -401,6 +459,48 @@ public sealed class CombatGestureGrid :
             return;
         }
 
+        if (permutationLatched)
+        {
+            ResetPointerState();
+            return;
+        }
+
+        if (strokeHoldClaimed)
+        {
+            int targetZone = strokeHoldTargetZone;
+            int[] zones = liveProjectedZones.ToArray();
+            bool wasAttempted = strokeHoldAttempted;
+
+            StopActiveStrokeHold();
+
+            if (!wasAttempted)
+            {
+                RoutedGestureAction action =
+                    RoutedGestureAction.Unmapped(
+                        "Non assigné",
+                        targetZone
+                    );
+                PublishStrokeHoldCompleted(
+                    targetZone,
+                    action,
+                    GestureInputKind.Stroke,
+                    zones
+                );
+                ResetPointerState();
+                PresentAction(action);
+                StartRecognitionFeedback(
+                    zones,
+                    ZoneColor(targetZone)
+                );
+            }
+            else
+            {
+                ResetPointerState();
+            }
+
+            return;
+        }
+
         bool isTap =
             maximumDisplacementSquared <=
             tapMovementThreshold * tapMovementThreshold;
@@ -447,7 +547,20 @@ public sealed class CombatGestureGrid :
         currentNormalizedPosition =
             LocalToNormalized(localPosition);
         hasPointerLocalPosition = true;
-        TrackLiveZone(currentNormalizedPosition);
+        int previousLogicalZone = currentLogicalZone;
+        currentLogicalZone = GetContextualZone(
+            currentNormalizedPosition
+        );
+        TrackLiveZone(currentLogicalZone);
+
+        if (!holdStarted)
+        {
+            UpdatePermutationState(currentLogicalZone);
+            UpdateStrokeHoldTracking(
+                previousLogicalZone,
+                currentLogicalZone
+            );
+        }
 
         float displacementSquared =
             (currentNormalizedPosition -
@@ -458,7 +571,7 @@ public sealed class CombatGestureGrid :
         );
         UpdateStrokeHoldState();
 
-        if (!holdStarted)
+        if (!holdStarted && !strokeHoldStarted)
         {
             AddGestureSample(
                 localPosition,
@@ -470,8 +583,167 @@ public sealed class CombatGestureGrid :
         UpdateRibbon();
     }
 
+    private int GetContextualZone(
+        Vector2 normalizedPosition)
+    {
+        if (startingZone == MiddleMovementZone &&
+            Mathf.Abs(
+                normalizedPosition.x -
+                ContextZoneCenter.x
+            ) <= ContextZoneHalfExtents.x &&
+            Mathf.Abs(
+                normalizedPosition.y -
+                ContextZoneCenter.y
+            ) <= ContextZoneHalfExtents.y)
+        {
+            return ContextMovementZone;
+        }
+
+        return HybridGestureRecognizer.GetZone(
+            normalizedPosition,
+            middleOuterOffset
+        );
+    }
+
+    private void UpdateStrokeHoldTracking(
+        int previousZone,
+        int currentZone)
+    {
+        if (startingZone != MiddleMovementZone)
+            return;
+
+        if (!strokeHoldClaimed)
+        {
+            if (previousZone == MiddleMovementZone &&
+                IsStrokeHoldDestination(currentZone))
+            {
+                strokeHoldClaimed = true;
+                strokeHoldTargetZone = currentZone;
+                strokeHoldStationarySince =
+                    Time.unscaledTime;
+                strokeHoldMovementAnchorNormalized =
+                    currentNormalizedPosition;
+            }
+
+            return;
+        }
+
+        if (currentZone != strokeHoldTargetZone)
+        {
+            strokeHoldStationarySince = 0f;
+            StopActiveStrokeHold();
+            return;
+        }
+
+        if (previousZone != currentZone)
+        {
+            strokeHoldStationarySince =
+                Time.unscaledTime;
+            strokeHoldMovementAnchorNormalized =
+                currentNormalizedPosition;
+            return;
+        }
+
+        if (strokeHoldAttempted)
+            return;
+
+        float toleranceSquared =
+            holdMovementTolerance *
+            holdMovementTolerance;
+        if ((currentNormalizedPosition -
+             strokeHoldMovementAnchorNormalized).sqrMagnitude >
+            toleranceSquared)
+        {
+            strokeHoldStationarySince =
+                Time.unscaledTime;
+            strokeHoldMovementAnchorNormalized =
+                currentNormalizedPosition;
+        }
+    }
+
+    private void UpdatePermutationState(int currentZone)
+    {
+        if (startingZone != LeftMovementZone ||
+            permutationLatched ||
+            permutationPathInvalid)
+        {
+            return;
+        }
+
+        if (!permutationCenterReached)
+        {
+            if (currentZone == LeftMovementZone)
+                return;
+
+            if (currentZone == MiddleDefenseZone)
+            {
+                permutationCenterReached = true;
+                return;
+            }
+
+            permutationPathInvalid = true;
+            return;
+        }
+
+        if (currentZone == MiddleDefenseZone)
+            return;
+
+        if (currentZone != RightMovementZone)
+        {
+            permutationPathInvalid = true;
+            return;
+        }
+
+        permutationLatched = true;
+        RoutedGestureAction action =
+            commandRouter.TryPermutation(
+                activeCommandToken
+            );
+        PublishPermutationCompleted(action);
+        PresentAction(
+            action,
+            commandRouter.PermutationFeedbackDuration
+        );
+        StartRecognitionFeedback(
+            PermutationZones,
+            ZoneColor(LeftMovementZone)
+        );
+    }
+
+    private void StopActiveStrokeHold()
+    {
+        if (!strokeHoldStarted)
+            return;
+
+        commandRouter?.EndStrokeHold();
+        strokeHoldStarted = false;
+        ShowFeedback(
+            "Déplacement arrêté",
+            ZoneColor(strokeHoldTargetZone),
+            0.8f
+        );
+    }
+
+    private static bool IsStrokeHoldDestination(int zone)
+    {
+        return zone is
+            MiddleDefenseZone or
+            ContextMovementZone or
+            LeftMovementZone or
+            RightMovementZone;
+    }
+
     private void UpdateStrokeHoldState()
     {
+        if (!inputEnabled ||
+            activePointerId == int.MinValue ||
+            !hasPointerLocalPosition ||
+            holdStarted ||
+            strokeHoldStarted)
+        {
+            return;
+        }
+
         float toleranceSquared =
             holdMovementTolerance *
             holdMovementTolerance;
@@ -635,6 +907,39 @@ public sealed class CombatGestureGrid :
 
             AddPointLabel(pointObject.transform, index);
         }
+
+        BuildContextPoint(pointsRoot);
+    }
+
+    private void BuildContextPoint(Transform pointsRoot)
+    {
+        const float pointSize = 38f;
+        GameObject pointObject =
+            new("Gesture Point 9");
+        pointObject.transform.SetParent(pointsRoot, false);
+
+        RectTransform pointRect =
+            pointObject.AddComponent<RectTransform>();
+        pointRect.anchorMin = pointRect.anchorMax =
+            Vector2.zero;
+        pointRect.pivot = new Vector2(0.5f, 0.5f);
+        pointRect.sizeDelta =
+            new Vector2(pointSize, pointSize);
+        pointRect.localPosition =
+            NormalizedToLocal(ContextZoneCenter);
+
+        contextPoint = pointObject.AddComponent<Image>();
+        contextPoint.color =
+            RestingColor(ContextMovementZone);
+        contextPoint.raycastTarget = false;
+        points.Add(contextPoint);
+
+        AddPointLabel(
+            pointObject.transform,
+            ContextMovementZone,
+            18
+        );
+        pointObject.SetActive(false);
     }
 
     private RectTransform CreateScaledVisualLayer(
@@ -666,7 +971,8 @@ public sealed class CombatGestureGrid :
 
     private static void AddPointLabel(
         Transform parent,
-        int index)
+        int index,
+        int fontSize = 24)
     {
         GameObject labelObject =
             new($"Gesture Label {(char)('A' + index)}");
@@ -686,7 +992,7 @@ public sealed class CombatGestureGrid :
             );
         label.alignment = TextAnchor.MiddleCenter;
         label.fontStyle = FontStyle.Bold;
-        label.fontSize = 24;
+        label.fontSize = fontSize;
         label.color =
             new Color(1f, 1f, 1f, 0.88f);
         label.raycastTarget = false;
@@ -767,7 +1073,9 @@ public sealed class CombatGestureGrid :
         }
     }
 
-    private void PresentAction(RoutedGestureAction action)
+    private void PresentAction(
+        RoutedGestureAction action,
+        float successDuration = 1f)
     {
         Color color = ZoneColor(action.CategoryZone);
 
@@ -785,7 +1093,8 @@ public sealed class CombatGestureGrid :
         ShowActionResult(
             action.CombatResult,
             action.Label,
-            color
+            color,
+            successDuration
         );
     }
 
@@ -854,25 +1163,37 @@ public sealed class CombatGestureGrid :
             commandRouter.EndHold(activeHoldZone);
         }
 
+        if (strokeHoldStarted && commandRouter != null)
+            commandRouter.EndStrokeHold();
+
         ResetPointerState();
     }
 
     private void ResetPointerState()
     {
         activePointerId = int.MinValue;
-        activeEventCamera = null;
-        activePointerDevice = null;
         startingZone = -1;
+        currentLogicalZone = -1;
         activeHoldZone = -1;
+        strokeHoldTargetZone = -1;
         pointerDownTime = 0f;
         lastMeaningfulMovementTime = 0f;
+        strokeHoldStationarySince = 0f;
         maximumDisplacementSquared = 0f;
         holdAttempted = false;
         holdStarted = false;
+        strokeHoldClaimed = false;
+        strokeHoldAttempted = false;
+        strokeHoldStarted = false;
+        permutationCenterReached = false;
+        permutationPathInvalid = false;
+        permutationLatched = false;
         strokeFollowedByHold = false;
         hasPointerLocalPosition = false;
+        activeCommandToken = 0;
         startingNormalizedPosition = Vector2.zero;
         lastMovementAnchorNormalized = Vector2.zero;
+        strokeHoldMovementAnchorNormalized = Vector2.zero;
         currentNormalizedPosition = Vector2.zero;
         currentPointerLocalPosition = Vector2.zero;
         liveProjectedZones.Clear();
@@ -882,6 +1203,7 @@ public sealed class CombatGestureGrid :
             ribbon.ClearPath();
 
         ResetPointVisuals();
+        SetContextPointVisible(false);
     }
 
     private void ClearRecordedGesture()
@@ -970,6 +1292,21 @@ public sealed class CombatGestureGrid :
         }
     }
 
+    private void SetContextPointVisible(bool visible)
+    {
+        if (contextPoint == null)
+            return;
+
+        contextPoint.gameObject.SetActive(visible);
+        if (visible)
+        {
+            contextPoint.color =
+                RestingColor(ContextMovementZone);
+            contextPoint.rectTransform.localScale =
+                Vector3.one;
+        }
+    }
+
     private void ShowFeedback(
         string message,
         Color color,
@@ -981,7 +1318,8 @@ public sealed class CombatGestureGrid :
     private void ShowActionResult(
         CombatActionResult result,
         string successMessage,
-        Color successColor)
+        Color successColor,
+        float successDuration = 1f)
     {
         switch (result)
         {
@@ -989,7 +1327,7 @@ public sealed class CombatGestureGrid :
                 ShowFeedback(
                     successMessage,
                     successColor,
-                    1f
+                    Mathf.Max(0.01f, successDuration)
                 );
                 break;
 
@@ -1022,7 +1360,10 @@ public sealed class CombatGestureGrid :
     private Color RestingColor(int index)
     {
         Color color = ZoneColor(index);
-        color.a = 0.24f;
+        color.a =
+            index == ContextMovementZone
+                ? 0.14f
+                : 0.24f;
         return color;
     }
 
@@ -1032,18 +1373,13 @@ public sealed class CombatGestureGrid :
             return attackColor;
         if (index is >= 3 and <= 5)
             return defenseColor;
-        if (index is >= 6 and <= 8)
+        if (index is >= 6 and <= 9)
             return movementColor;
         return Color.white;
     }
 
-    private void TrackLiveZone(Vector2 normalizedPosition)
+    private void TrackLiveZone(int zone)
     {
-        int zone = HybridGestureRecognizer.GetZone(
-            normalizedPosition,
-            middleOuterOffset
-        );
-
         if (liveProjectedZones.Count > 0 &&
             liveProjectedZones[^1] == zone)
         {
@@ -1076,7 +1412,8 @@ public sealed class CombatGestureGrid :
                 action.IsMapped,
                 action.HasCombatResult,
                 action.CombatResult,
-                action.Label
+                action.Label,
+                action.RefusalReason
             )
         );
     }
@@ -1098,9 +1435,73 @@ public sealed class CombatGestureGrid :
                 action.IsMapped,
                 action.HasCombatResult,
                 action.CombatResult,
-                action.Label
+                action.Label,
+                action.RefusalReason
             )
         );
+    }
+
+    private void PublishStrokeHoldCompleted(
+        int destinationZone,
+        RoutedGestureAction action,
+        GestureInputKind inputKind =
+            GestureInputKind.StrokeAndHold,
+        IReadOnlyList<int> zones = null)
+    {
+        GestureCompleted?.Invoke(
+            new GestureDebugEventData(
+                GestureDebugPhase.Completed,
+                inputKind,
+                GestureRecognitionStatus.Recognized,
+                StrokeHoldGestureId(destinationZone),
+                zones ?? new[]
+                {
+                    MiddleMovementZone,
+                    destinationZone
+                },
+                action.IsMapped,
+                action.HasCombatResult,
+                action.CombatResult,
+                action.Label,
+                action.RefusalReason
+            )
+        );
+    }
+
+    private void PublishPermutationCompleted(
+        RoutedGestureAction action)
+    {
+        GestureCompleted?.Invoke(
+            new GestureDebugEventData(
+                GestureDebugPhase.Completed,
+                GestureInputKind.Stroke,
+                GestureRecognitionStatus.Recognized,
+                CombatGestureId.Permutation,
+                PermutationZones,
+                action.IsMapped,
+                action.HasCombatResult,
+                action.CombatResult,
+                action.Label,
+                action.RefusalReason
+            )
+        );
+    }
+
+    private static CombatGestureId StrokeHoldGestureId(
+        int destinationZone)
+    {
+        return destinationZone switch
+        {
+            MiddleDefenseZone =>
+                CombatGestureId.Advance,
+            ContextMovementZone =>
+                CombatGestureId.Retreat,
+            LeftMovementZone =>
+                CombatGestureId.StrafeLeft,
+            RightMovementZone =>
+                CombatGestureId.StrafeRight,
+            _ => CombatGestureId.None
+        };
     }
 
     private void PublishRecognitionCompleted(
@@ -1117,7 +1518,8 @@ public sealed class CombatGestureGrid :
                 action.IsMapped,
                 action.HasCombatResult,
                 action.CombatResult,
-                action.Label
+                action.Label,
+                action.RefusalReason
             )
         );
     }
