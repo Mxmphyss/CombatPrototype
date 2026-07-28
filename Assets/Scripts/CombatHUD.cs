@@ -37,6 +37,8 @@ public sealed class CombatHUD : MonoBehaviour
     private CanvasGroup feedbackGroup;
     private Button retryButton;
     private Coroutine feedbackRoutine;
+    private Coroutine playerStaminaFeedbackRoutine;
+    private Coroutine enemyStaminaFeedbackRoutine;
 
     public bool BattleEnded { get; private set; }
     public CombatGestureGrid GestureGrid => gestureGrid;
@@ -124,6 +126,8 @@ public sealed class CombatHUD : MonoBehaviour
 
         if (feedbackRoutine != null)
             StopCoroutine(feedbackRoutine);
+
+        ResetStaminaFeedback();
     }
 
     public void ShowMessage(
@@ -202,6 +206,7 @@ public sealed class CombatHUD : MonoBehaviour
         if (retryButton != null)
             retryButton.gameObject.SetActive(false);
 
+        ResetStaminaFeedback();
         SetEnemyStatus(string.Empty);
     }
 
@@ -428,6 +433,8 @@ public sealed class CombatHUD : MonoBehaviour
 
         playerCombat.OnAttackResolved += HandleAttackResolved;
         enemyCombat.OnAttackResolved += HandleAttackResolved;
+        playerCombat.OnGuardImpact += HandleGuardImpact;
+        enemyCombat.OnGuardImpact += HandleGuardImpact;
         enemyCombat.OnStateChanged += HandleEnemyStateChanged;
     }
 
@@ -446,11 +453,15 @@ public sealed class CombatHUD : MonoBehaviour
         }
 
         if (playerCombat != null)
+        {
             playerCombat.OnAttackResolved -= HandleAttackResolved;
+            playerCombat.OnGuardImpact -= HandleGuardImpact;
+        }
 
         if (enemyCombat != null)
         {
             enemyCombat.OnAttackResolved -= HandleAttackResolved;
+            enemyCombat.OnGuardImpact -= HandleGuardImpact;
             enemyCombat.OnStateChanged -= HandleEnemyStateChanged;
         }
     }
@@ -490,12 +501,48 @@ public sealed class CombatHUD : MonoBehaviour
             FighterCombatState.Defending => "Garde",
             FighterCombatState.Charging => "Recharge",
             FighterCombatState.Dodging => "Esquive",
-            FighterCombatState.Stunned => "Interrompu",
+            FighterCombatState.Stunned => "Etourdi",
             FighterCombatState.Dead => "Vaincu",
             _ => string.Empty
         };
 
         SetEnemyStatus(label);
+    }
+
+    private void HandleGuardImpact(GuardImpact impact)
+    {
+        if (BattleEnded || impact.Target == null)
+            return;
+
+        StatBar bar = impact.Target == playerCombat
+            ? playerStaminaBar
+            : impact.Target == enemyCombat
+                ? enemyStaminaBar
+                : null;
+        if (bar == null)
+            return;
+
+        CombatRulesConfig rules = impact.Target.Rules;
+        Coroutine existing =
+            impact.Target == playerCombat
+                ? playerStaminaFeedbackRoutine
+                : enemyStaminaFeedbackRoutine;
+        if (existing != null)
+            StopCoroutine(existing);
+
+        Coroutine routine = StartCoroutine(
+            StaminaImpactFeedbackRoutine(
+                bar,
+                rules.StaminaBarFeedbackDuration,
+                rules.StaminaBarFeedbackIntensity,
+                impact.Target == playerCombat
+            )
+        );
+
+        if (impact.Target == playerCombat)
+            playerStaminaFeedbackRoutine = routine;
+        else
+            enemyStaminaFeedbackRoutine = routine;
     }
 
     private void HandleAttackResolved(CombatImpact impact)
@@ -505,6 +552,14 @@ public sealed class CombatHUD : MonoBehaviour
 
         switch (impact.Result)
         {
+            case CombatHitResult.GuardBroken:
+                ShowMessage(
+                    "Garde brisee",
+                    new Color(1f, 0.42f, 0.18f),
+                    1.35f
+                );
+                break;
+
             case CombatHitResult.Blocked:
                 ShowMessage(
                     "Garde reussie",
@@ -537,6 +592,49 @@ public sealed class CombatHUD : MonoBehaviour
                 );
                 break;
         }
+    }
+
+    private IEnumerator StaminaImpactFeedbackRoutine(
+        StatBar bar,
+        float duration,
+        float intensity,
+        bool isPlayer)
+    {
+        float safeDuration = Mathf.Max(0.01f, duration);
+        float safeIntensity = Mathf.Clamp01(intensity);
+        float elapsed = 0f;
+
+        while (elapsed < safeDuration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float normalized =
+                Mathf.Clamp01(elapsed / safeDuration);
+            float pulse = Mathf.Sin(normalized * Mathf.PI);
+            bar.SetFeedback(
+                1f + pulse * safeIntensity * 0.08f,
+                pulse * safeIntensity
+            );
+            yield return null;
+        }
+
+        bar.ResetFeedback();
+        if (isPlayer)
+            playerStaminaFeedbackRoutine = null;
+        else
+            enemyStaminaFeedbackRoutine = null;
+    }
+
+    private void ResetStaminaFeedback()
+    {
+        if (playerStaminaFeedbackRoutine != null)
+            StopCoroutine(playerStaminaFeedbackRoutine);
+        if (enemyStaminaFeedbackRoutine != null)
+            StopCoroutine(enemyStaminaFeedbackRoutine);
+
+        playerStaminaFeedbackRoutine = null;
+        enemyStaminaFeedbackRoutine = null;
+        playerStaminaBar?.ResetFeedback();
+        enemyStaminaBar?.ResetFeedback();
     }
 
     private IEnumerator FadeMessageRoutine(float duration)
@@ -658,7 +756,13 @@ public sealed class CombatHUD : MonoBehaviour
         );
         value.color = TextColor;
 
-        return new StatBar(fill, value, normalColor, lowColor);
+        return new StatBar(
+            rect,
+            fill,
+            value,
+            normalColor,
+            lowColor
+        );
     }
 
     private static Text CreateText(
@@ -701,21 +805,26 @@ public sealed class CombatHUD : MonoBehaviour
 
     private sealed class StatBar
     {
+        private readonly RectTransform root;
         private readonly Image fill;
         private readonly Text value;
         private readonly Color normalColor;
         private readonly Color lowColor;
+        private Color currentColor;
 
         public StatBar(
+            RectTransform rootRect,
             Image fillImage,
             Text valueText,
             Color normal,
             Color low)
         {
+            root = rootRect;
             fill = fillImage;
             value = valueText;
             normalColor = normal;
             lowColor = low;
+            currentColor = normal;
         }
 
         public void SetValue(float current, float maximum)
@@ -725,11 +834,31 @@ public sealed class CombatHUD : MonoBehaviour
                 Mathf.Clamp01(current / safeMaximum);
 
             fill.fillAmount = normalized;
-            fill.color =
+            currentColor =
                 normalized <= 0.25f ? lowColor : normalColor;
+            fill.color = currentColor;
             value.text =
                 $"{Mathf.CeilToInt(current)} / " +
                 $"{Mathf.CeilToInt(maximum)}";
+        }
+
+        public void SetFeedback(
+            float scale,
+            float flashIntensity)
+        {
+            root.localScale =
+                Vector3.one * Mathf.Max(1f, scale);
+            fill.color = Color.Lerp(
+                currentColor,
+                Color.white,
+                Mathf.Clamp01(flashIntensity)
+            );
+        }
+
+        public void ResetFeedback()
+        {
+            root.localScale = Vector3.one;
+            fill.color = currentColor;
         }
     }
 }

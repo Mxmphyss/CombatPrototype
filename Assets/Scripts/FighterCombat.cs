@@ -24,10 +24,18 @@ public enum FighterCombatState
     Dead
 }
 
+public enum FighterStunReason
+{
+    None,
+    Countered,
+    GuardBreak
+}
+
 public enum CombatHitResult
 {
     Hit,
     Blocked,
+    GuardBroken,
     PerfectGuard,
     Dodged,
     PerfectDodge
@@ -53,6 +61,26 @@ public readonly struct CombatImpact
     }
 }
 
+public readonly struct GuardImpact
+{
+    public FighterCombat Target { get; }
+    public float StaminaDamage { get; }
+    public bool GuardBroken { get; }
+    public float ImpactTime { get; }
+
+    public GuardImpact(
+        FighterCombat target,
+        float staminaDamage,
+        bool guardBroken,
+        float impactTime)
+    {
+        Target = target;
+        StaminaDamage = staminaDamage;
+        GuardBroken = guardBroken;
+        ImpactTime = impactTime;
+    }
+}
+
 public class FighterCombat : MonoBehaviour
 {
     [Header("Controle")]
@@ -62,6 +90,7 @@ public class FighterCombat : MonoBehaviour
     [SerializeField] private FighterStats fighterStats;
     [SerializeField] private FighterStats targetStats;
     [SerializeField] private FighterCombat targetCombat;
+    [SerializeField] private CombatRulesConfig combatRules;
 
     [Header("Attaque legere")]
     [SerializeField] private float lightAttackDamage = 20f;
@@ -95,10 +124,6 @@ public class FighterCombat : MonoBehaviour
     [Range(0f, 1f)]
     [SerializeField] private float perfectGuardRefundRatio = 0.5f;
 
-    [Header("Garde maintenue")]
-    [Min(0f)]
-    [SerializeField] private float heldGuardStaminaCostPerSecond = 15f;
-
     [Header("Esquive")]
     [Min(0f)]
     [SerializeField] private float dodgeStaminaCost = 20f;
@@ -117,6 +142,7 @@ public class FighterCombat : MonoBehaviour
     public event Action<FighterCombat, FighterCombatState>
         OnStateChanged;
     public event Action<CombatImpact> OnAttackResolved;
+    public event Action<GuardImpact> OnGuardImpact;
 
     public FighterStats Stats => fighterStats;
     public bool IsDefending =>
@@ -125,6 +151,9 @@ public class FighterCombat : MonoBehaviour
         CurrentState == FighterCombatState.Dodging;
     public bool IsCharging =>
         CurrentState == FighterCombatState.Charging;
+    public bool IsHeldGuardActive =>
+        CurrentState == FighterCombatState.Defending &&
+        heldGuardActive;
     public bool IsBusy =>
         CurrentState != FighterCombatState.Idle &&
         CurrentState != FighterCombatState.Dead;
@@ -133,7 +162,17 @@ public class FighterCombat : MonoBehaviour
     public bool IsPlayerControlled => controlledByPlayer;
     public float LightAttackStaminaCost =>
         lightAttackStaminaCost;
+    public CombatRulesConfig Rules =>
+        combatRules != null
+            ? combatRules
+            : CombatRulesConfig.RuntimeDefault;
     public FighterCombatState CurrentState { get; private set; }
+    public FighterStunReason CurrentStunReason
+    {
+        get;
+        private set;
+    }
+    public float StunRemaining { get; private set; }
 
     private bool combatEnabled = true;
     private bool heldGuardActive;
@@ -154,6 +193,7 @@ public class FighterCombat : MonoBehaviour
         initialPosition = transform.position;
         initialRotation = transform.rotation;
         CurrentState = FighterCombatState.Idle;
+        CurrentStunReason = FighterStunReason.None;
     }
 
     private void OnEnable()
@@ -172,15 +212,8 @@ public class FighterCombat : MonoBehaviour
 
     private void Update()
     {
-        if (CurrentState == FighterCombatState.Defending &&
-            heldGuardActive)
-        {
-            UpdateHeldGuard();
-        }
-        else if (CurrentState == FighterCombatState.Charging)
-        {
+        if (CurrentState == FighterCombatState.Charging)
             UpdateCharge();
-        }
     }
 
     public CombatActionResult LightAttack(
@@ -231,12 +264,6 @@ public class FighterCombat : MonoBehaviour
 
         if (CurrentState != FighterCombatState.Idle)
             return CombatActionResult.Busy;
-
-        float initialCost =
-            heldGuardStaminaCostPerSecond *
-            Time.unscaledDeltaTime;
-        if (!fighterStats.SpendStamina(initialCost))
-            return CombatActionResult.NotEnoughStamina;
 
         heldGuardActive = true;
         defenseStartedAt = Time.time;
@@ -294,12 +321,22 @@ public class FighterCombat : MonoBehaviour
             CancelActiveActions(true);
     }
 
+    public void SetCombatRules(CombatRulesConfig rules)
+    {
+        combatRules =
+            rules != null
+                ? rules
+                : CombatRulesConfig.RuntimeDefault;
+    }
+
     public void ResetCombatState()
     {
         StopAllCoroutines();
         combatEnabled = true;
         heldGuardActive = false;
         chargeHoldTime = 0f;
+        CurrentStunReason = FighterStunReason.None;
+        StunRemaining = 0f;
         defenseStartedAt = float.NegativeInfinity;
         dodgeStartedAt = float.NegativeInfinity;
         transform.SetPositionAndRotation(
@@ -314,6 +351,8 @@ public class FighterCombat : MonoBehaviour
         StopAllCoroutines();
         heldGuardActive = false;
         chargeHoldTime = 0f;
+        CurrentStunReason = FighterStunReason.None;
+        StunRemaining = 0f;
 
         if (restoreNeutralTransform)
         {
@@ -395,8 +434,14 @@ public class FighterCombat : MonoBehaviour
 
         if (stunDuration > 0f)
         {
+            CurrentStunReason =
+                FighterStunReason.Countered;
+            StunRemaining = stunDuration;
             SetState(FighterCombatState.Stunned);
             yield return new WaitForSeconds(stunDuration);
+            CurrentStunReason =
+                FighterStunReason.None;
+            StunRemaining = 0f;
         }
 
         SetState(FighterCombatState.Recovering);
@@ -456,11 +501,47 @@ public class FighterCombat : MonoBehaviour
                 return CombatHitResult.PerfectGuard;
             }
 
+            if (heldGuardActive)
+            {
+                return ResolveHeldGuardImpact(
+                    impactTime
+                );
+            }
+
             return CombatHitResult.Blocked;
         }
 
         fighterStats.TakeDamage(incomingDamage);
         return CombatHitResult.Hit;
+    }
+
+    private CombatHitResult ResolveHeldGuardImpact(
+        float impactTime)
+    {
+        float staminaDamage =
+            Rules.ResolveGuardStaminaDamage();
+        float appliedStaminaDamage =
+            fighterStats.ApplyStaminaDamage(
+                staminaDamage
+            );
+
+        bool guardBroken =
+            fighterStats.CurrentStamina <= Mathf.Epsilon;
+        if (guardBroken)
+            BeginGuardBreakStun();
+
+        OnGuardImpact?.Invoke(
+            new GuardImpact(
+                this,
+                appliedStaminaDamage,
+                guardBroken,
+                impactTime
+            )
+        );
+
+        return guardBroken
+            ? CombatHitResult.GuardBroken
+            : CombatHitResult.Blocked;
     }
 
     private IEnumerator DefenseRoutine()
@@ -475,15 +556,87 @@ public class FighterCombat : MonoBehaviour
         }
     }
 
-    private void UpdateHeldGuard()
+    private void BeginGuardBreakStun()
     {
-        if (!combatEnabled)
+        if (CurrentState == FighterCombatState.Stunned &&
+            CurrentStunReason ==
+            FighterStunReason.GuardBreak)
+        {
             return;
+        }
 
-        float cost =
-            heldGuardStaminaCostPerSecond * Time.deltaTime;
-        if (!fighterStats.SpendStamina(cost))
-            StopHeldGuard();
+        StopAllCoroutines();
+        heldGuardActive = false;
+        chargeHoldTime = 0f;
+        defenseStartedAt = float.NegativeInfinity;
+        dodgeStartedAt = float.NegativeInfinity;
+        fighterStats.SetStamina(0f);
+
+        CurrentStunReason =
+            FighterStunReason.GuardBreak;
+        StunRemaining =
+            Rules.GuardBreakStunDuration;
+        SetState(FighterCombatState.Stunned);
+
+        StartCoroutine(GuardBreakStunRoutine());
+    }
+
+    private IEnumerator GuardBreakStunRoutine()
+    {
+        float duration =
+            Rules.GuardBreakStunDuration;
+        float targetStamina = Mathf.Min(
+            Rules.StunRecoveryStamina,
+            fighterStats.MaxStamina
+        );
+        AnimationCurve recoveryCurve =
+            Rules.StunRecoveryCurve;
+        recoveryCurve ??=
+            AnimationCurve.EaseInOut(
+                0f,
+                0f,
+                1f,
+                1f
+            );
+        float elapsed = 0f;
+
+        while (elapsed < duration &&
+               combatEnabled &&
+               !IsDead &&
+               CurrentState ==
+               FighterCombatState.Stunned &&
+               CurrentStunReason ==
+               FighterStunReason.GuardBreak)
+        {
+            float normalizedTime =
+                Mathf.Clamp01(elapsed / duration);
+            float progress = Mathf.Clamp01(
+                recoveryCurve.Evaluate(normalizedTime)
+            );
+
+            fighterStats.SetStamina(
+                targetStamina * progress
+            );
+            StunRemaining =
+                Mathf.Max(0f, duration - elapsed);
+            yield return null;
+            elapsed += Time.unscaledDeltaTime;
+        }
+
+        if (!combatEnabled ||
+            IsDead ||
+            CurrentState != FighterCombatState.Stunned ||
+            CurrentStunReason !=
+            FighterStunReason.GuardBreak)
+        {
+            yield break;
+        }
+
+        fighterStats.SetStamina(targetStamina);
+        StunRemaining = 0f;
+        CurrentStunReason =
+            FighterStunReason.None;
+        SetState(FighterCombatState.Idle);
     }
 
     private void UpdateCharge()

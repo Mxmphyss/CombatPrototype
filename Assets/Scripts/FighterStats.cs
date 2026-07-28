@@ -81,14 +81,18 @@ public class FighterStats : MonoBehaviour
         if (IsDead || currentStamina + Mathf.Epsilon < amount)
             return false;
 
-        currentStamina = Mathf.Clamp(
-            currentStamina - amount,
-            0f,
-            maxStamina
-        );
-        isStaminaCritical = currentStamina <= 0.1f;
-        OnStaminaChanged?.Invoke(currentStamina, maxStamina);
+        SetStaminaValue(currentStamina - amount);
         return true;
+    }
+
+    public float ApplyStaminaDamage(float amount)
+    {
+        if (amount <= 0f || IsDead)
+            return 0f;
+
+        float previousStamina = currentStamina;
+        SetStaminaValue(currentStamina - amount);
+        return previousStamina - currentStamina;
     }
 
     public void RecoverStamina(float amount)
@@ -96,21 +100,20 @@ public class FighterStats : MonoBehaviour
         if (amount <= 0f || IsDead || currentStamina >= maxStamina)
             return;
 
-        float previousStamina = currentStamina;
-        currentStamina = Mathf.Clamp(
-            currentStamina + amount,
-            0f,
-            maxStamina
-        );
-        isStaminaCritical = currentStamina <= 0.1f;
-
-        if (!Mathf.Approximately(previousStamina, currentStamina))
-            OnStaminaChanged?.Invoke(currentStamina, maxStamina);
+        SetStaminaValue(currentStamina + amount);
     }
 
     public void RecoverStaminaFromCharge(float amount)
     {
         RecoverStamina(amount);
+    }
+
+    public void SetStamina(float value)
+    {
+        if (IsDead)
+            return;
+
+        SetStaminaValue(value);
     }
 
     public void ResetStats()
@@ -127,6 +130,17 @@ public class FighterStats : MonoBehaviour
     public void NotifyAllValues()
     {
         OnHealthChanged?.Invoke(currentHealth, maxHealth);
+        OnStaminaChanged?.Invoke(currentStamina, maxStamina);
+    }
+
+    private void SetStaminaValue(float value)
+    {
+        float clamped = Mathf.Clamp(value, 0f, maxStamina);
+        if (currentStamina == clamped)
+            return;
+
+        currentStamina = clamped;
+        isStaminaCritical = currentStamina <= 0.1f;
         OnStaminaChanged?.Invoke(currentStamina, maxStamina);
     }
 

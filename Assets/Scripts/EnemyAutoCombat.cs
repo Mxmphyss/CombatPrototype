@@ -108,7 +108,10 @@ public sealed class EnemyAutoCombat : MonoBehaviour
             yield return WaitUntilAIEnabled();
 
             if (!CanAct())
+            {
+                yield return null;
                 continue;
+            }
 
             float delay = UnityEngine.Random.Range(
                 Mathf.Min(minimumDelay, maximumDelay),
@@ -192,6 +195,13 @@ public sealed class EnemyAutoCombat : MonoBehaviour
                enemy.Stats.CurrentStamina + Mathf.Epsilon <
                enemy.LightAttackStaminaCost)
         {
+            if (enemy.CurrentState ==
+                FighterCombatState.Stunned)
+            {
+                yield return null;
+                continue;
+            }
+
             if (!enemyAIEnabled)
             {
                 yield return null;
@@ -252,7 +262,10 @@ public sealed class EnemyAutoCombat : MonoBehaviour
 
     private bool CanAct()
     {
-        return enemyAIEnabled && CanContinue();
+        return enemyAIEnabled &&
+               CanContinue() &&
+               enemy.CurrentState !=
+               FighterCombatState.Stunned;
     }
 
     private void ApplyAIEnabledState()

@@ -37,12 +37,16 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
     private Vector3 cameraStartPosition;
     private Vector3 playerNeutralPosition;
     private Vector3 enemyNeutralPosition;
+    private Vector3 playerNeutralScale;
+    private Vector3 enemyNeutralScale;
     private Coroutine hitStopRoutine;
     private Coroutine cameraShakeRoutine;
     private Coroutine playerFlashRoutine;
     private Coroutine enemyFlashRoutine;
     private Coroutine playerRecoilRoutine;
     private Coroutine enemyRecoilRoutine;
+    private Coroutine playerGuardBreakRoutine;
+    private Coroutine enemyGuardBreakRoutine;
     private bool initialized;
 
     private static readonly int BaseColorId =
@@ -67,6 +71,8 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
 
         playerNeutralPosition = player.transform.position;
         enemyNeutralPosition = enemy.transform.position;
+        playerNeutralScale = player.transform.localScale;
+        enemyNeutralScale = enemy.transform.localScale;
         if (combatCamera != null)
             cameraStartPosition = combatCamera.transform.localPosition;
 
@@ -87,9 +93,15 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
         if (initialized)
         {
             if (player != null)
+            {
                 player.transform.position = playerNeutralPosition;
+                player.transform.localScale = playerNeutralScale;
+            }
             if (enemy != null)
+            {
                 enemy.transform.position = enemyNeutralPosition;
+                enemy.transform.localScale = enemyNeutralScale;
+            }
             if (combatCamera != null)
             {
                 combatCamera.transform.localPosition =
@@ -107,22 +119,36 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
         enemyFlashRoutine = null;
         playerRecoilRoutine = null;
         enemyRecoilRoutine = null;
+        playerGuardBreakRoutine = null;
+        enemyGuardBreakRoutine = null;
     }
 
     private void Subscribe()
     {
         if (player != null)
+        {
             player.OnAttackResolved += HandleImpact;
+            player.OnGuardImpact += HandleGuardImpact;
+        }
         if (enemy != null)
+        {
             enemy.OnAttackResolved += HandleImpact;
+            enemy.OnGuardImpact += HandleGuardImpact;
+        }
     }
 
     private void Unsubscribe()
     {
         if (player != null)
+        {
             player.OnAttackResolved -= HandleImpact;
+            player.OnGuardImpact -= HandleGuardImpact;
+        }
         if (enemy != null)
+        {
             enemy.OnAttackResolved -= HandleImpact;
+            enemy.OnGuardImpact -= HandleGuardImpact;
+        }
     }
 
     private void HandleImpact(CombatImpact impact)
@@ -147,6 +173,28 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
             PlayHitStop(hitStopDuration * 1.5f);
             PlayCameraShake(0.65f);
         }
+    }
+
+    private void HandleGuardImpact(GuardImpact impact)
+    {
+        if (!feedbackEnabled ||
+            !impact.GuardBroken ||
+            impact.Target == null)
+        {
+            return;
+        }
+
+        CombatRulesConfig rules = impact.Target.Rules;
+        PlayTargetFlash(
+            impact.Target,
+            rules.GuardBreakFlashColor,
+            rules.GuardBreakCharacterFeedbackDuration
+        );
+        PlayGuardBreakPulse(
+            impact.Target,
+            rules.GuardBreakCharacterFeedbackIntensity,
+            rules.GuardBreakCharacterFeedbackDuration
+        );
     }
 
     private void PlayTargetFeedback(
@@ -191,6 +239,18 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
 
     private void PlayTargetFlash(FighterCombat target)
     {
+        PlayTargetFlash(
+            target,
+            Color.white,
+            flashDuration
+        );
+    }
+
+    private void PlayTargetFlash(
+        FighterCombat target,
+        Color color,
+        float duration)
+    {
         if (!flashEnabled || target == null)
             return;
 
@@ -205,12 +265,80 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
             StopCoroutine(existing);
 
         Coroutine routine = StartCoroutine(
-            FlashRoutine(targetRenderer)
+            FlashRoutine(
+                targetRenderer,
+                color,
+                duration
+            )
         );
         if (target == player)
             playerFlashRoutine = routine;
         else
             enemyFlashRoutine = routine;
+    }
+
+    private void PlayGuardBreakPulse(
+        FighterCombat target,
+        float intensity,
+        float duration)
+    {
+        Coroutine existing = target == player
+            ? playerGuardBreakRoutine
+            : enemyGuardBreakRoutine;
+        if (existing != null)
+            StopCoroutine(existing);
+
+        Vector3 neutralScale = target == player
+            ? playerNeutralScale
+            : enemyNeutralScale;
+        Coroutine routine = StartCoroutine(
+            GuardBreakPulseRoutine(
+                target,
+                neutralScale,
+                intensity,
+                duration
+            )
+        );
+
+        if (target == player)
+            playerGuardBreakRoutine = routine;
+        else
+            enemyGuardBreakRoutine = routine;
+    }
+
+    private IEnumerator GuardBreakPulseRoutine(
+        FighterCombat target,
+        Vector3 neutralScale,
+        float intensity,
+        float duration)
+    {
+        float safeDuration = Mathf.Max(0.01f, duration);
+        float safeIntensity = Mathf.Clamp(
+            intensity,
+            0f,
+            0.5f
+        );
+        float elapsed = 0f;
+
+        while (elapsed < safeDuration)
+        {
+            elapsed += Time.unscaledDeltaTime;
+            float normalized =
+                Mathf.Clamp01(elapsed / safeDuration);
+            float pulse =
+                Mathf.Sin(normalized * Mathf.PI * 3f) *
+                (1f - normalized);
+            target.transform.localScale =
+                neutralScale *
+                (1f + pulse * safeIntensity);
+            yield return null;
+        }
+
+        target.transform.localScale = neutralScale;
+        if (target == player)
+            playerGuardBreakRoutine = null;
+        else
+            enemyGuardBreakRoutine = null;
     }
 
     private void PlayHitStop(float duration)
@@ -270,15 +398,19 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
             enemyRecoilRoutine = null;
     }
 
-    private IEnumerator FlashRoutine(Renderer targetRenderer)
+    private IEnumerator FlashRoutine(
+        Renderer targetRenderer,
+        Color color,
+        float duration)
     {
         targetRenderer.GetPropertyBlock(propertyBlock);
-        propertyBlock.SetColor(BaseColorId, Color.white);
-        propertyBlock.SetColor(ColorId, Color.white);
+        propertyBlock.SetColor(BaseColorId, color);
+        propertyBlock.SetColor(ColorId, color);
         targetRenderer.SetPropertyBlock(propertyBlock);
 
         float elapsed = 0f;
-        while (elapsed < flashDuration)
+        float safeDuration = Mathf.Max(0.01f, duration);
+        while (elapsed < safeDuration)
         {
             elapsed += Time.unscaledDeltaTime;
             yield return null;

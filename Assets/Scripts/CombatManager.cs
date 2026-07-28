@@ -54,6 +54,11 @@ public sealed class CombatManager : MonoBehaviour
         playerStats = player.Stats;
         enemyStats = enemy.Stats;
 
+        CombatRulesConfig sharedRules =
+            playerCombat.Rules;
+        playerCombat.SetCombatRules(sharedRules);
+        enemyCombat.SetCombatRules(sharedRules);
+
         if (playerStats == null || enemyStats == null)
         {
             Debug.LogError(
