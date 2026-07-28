@@ -532,12 +532,26 @@ MonoBehaviour:
   fighterStats: {fileID: 810199910}
   targetStats: {fileID: 1814160285}
   targetCombat: {fileID: 1814160290}
+  combatRules: {fileID: 0}
   lightAttackDamage: 20
   lightAttackStaminaCost: 10
+  attackStartupDuration: 0.12
+  attackLungeDuration: 0.15
+  attackReturnDuration: 0.15
+  attackRecoveryDuration: 0.5
+  perfectDodgeStunDuration: 0.32
   chargeStartupDelay: 0.3
   chargeRecoveryPerSecond: 25
   defenseDuration: 0.8
   defenseStaminaCost: 10
+  perfectGuardWindow: 0.12
+  perfectGuardRefundRatio: 0.5
+  dodgeStaminaCost: 20
+  dodgeDistance: 1.25
+  dodgeMovementDuration: 0.18
+  dodgeActiveDuration: 0.4
+  perfectDodgeWindow: 0.2
+  dodgeRecoveryDuration: 0.12
 --- !u!1 &832575517
 GameObject:
   m_ObjectHideFlags: 0
@@ -695,7 +709,7 @@ Transform:
   serializedVersion: 2
   m_LocalRotation: {x: 0, y: 0, z: 0, w: 1}
   m_LocalPosition: {x: 0, y: 0, z: 0}
-  m_LocalScale: {x: 2, y: 1, z: 2}
+  m_LocalScale: {x: 2.3472793, y: 1, z: 2.5534403}
   m_ConstrainProportionsScale: 0
   m_Children: []
   m_Father: {fileID: 0}
@@ -849,12 +863,26 @@ MonoBehaviour:
   fighterStats: {fileID: 1814160285}
   targetStats: {fileID: 810199910}
   targetCombat: {fileID: 810199915}
+  combatRules: {fileID: 0}
   lightAttackDamage: 20
   lightAttackStaminaCost: 10
+  attackStartupDuration: 0.12
+  attackLungeDuration: 0.15
+  attackReturnDuration: 0.15
+  attackRecoveryDuration: 0.5
+  perfectDodgeStunDuration: 0.32
   chargeStartupDelay: 0.3
   chargeRecoveryPerSecond: 25
   defenseDuration: 0.8
   defenseStaminaCost: 10
+  perfectGuardWindow: 0.12
+  perfectGuardRefundRatio: 0.5
+  dodgeStaminaCost: 20
+  dodgeDistance: 1.25
+  dodgeMovementDuration: 0.18
+  dodgeActiveDuration: 0.4
+  perfectDodgeWindow: 0.2
+  dodgeRecoveryDuration: 0.12
 --- !u!1660057539 &9223372036854775807
 SceneRoots:
   m_ObjectHideFlags: 0
