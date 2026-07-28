@@ -37,6 +37,11 @@ public sealed class CombatGestureGrid :
     [SerializeField]
     private Vector2 padAnchoredPosition = new(0f, 205f);
 
+    [Header("Presentation visuelle")]
+    [Range(0.5f, 1f)]
+    [SerializeField]
+    private float visualScale = 0.85f;
+
     [Range(0f, 0.3f)]
     [SerializeField]
     private float middleOuterOffset = 0.1f;
@@ -144,13 +149,8 @@ public sealed class CombatGestureGrid :
 
         Image surface = gridObject.AddComponent<Image>();
         surface.color =
-            new Color(0.025f, 0.035f, 0.055f, 0.08f);
+            new Color(0f, 0f, 0f, 0.001f);
         surface.raycastTarget = true;
-
-        Outline outline = gridObject.AddComponent<Outline>();
-        outline.effectColor =
-            new Color(0.7f, 0.78f, 0.9f, 0.08f);
-        outline.effectDistance = new Vector2(1f, -1f);
 
         CombatGestureGrid grid =
             gridObject.AddComponent<CombatGestureGrid>();
@@ -185,6 +185,7 @@ public sealed class CombatGestureGrid :
         rect.anchoredPosition = padAnchoredPosition;
         rect.sizeDelta = padSize;
 
+        BuildVisualBackground();
         BuildRibbon();
         BuildPoints();
         ResetPointerState();
@@ -574,9 +575,33 @@ public sealed class CombatGestureGrid :
         ribbon.ClearPath();
     }
 
+    private void BuildVisualBackground()
+    {
+        RectTransform backgroundRect =
+            CreateScaledVisualLayer(
+                "Gesture Visual Background"
+            );
+
+        Image background =
+            backgroundRect.gameObject.AddComponent<Image>();
+        background.color =
+            new Color(0.025f, 0.035f, 0.055f, 0.08f);
+        background.raycastTarget = false;
+
+        Outline outline =
+            backgroundRect.gameObject.AddComponent<Outline>();
+        outline.effectColor =
+            new Color(0.7f, 0.78f, 0.9f, 0.08f);
+        outline.effectDistance = new Vector2(1f, -1f);
+    }
+
     private void BuildPoints()
     {
         const float pointSize = 54f;
+        RectTransform pointsRoot =
+            CreateScaledVisualLayer(
+                "Gesture Visual Points"
+            );
 
         for (int index = 0;
              index < GridSize * GridSize;
@@ -584,7 +609,10 @@ public sealed class CombatGestureGrid :
         {
             GameObject pointObject =
                 new($"Gesture Point {index}");
-            pointObject.transform.SetParent(transform, false);
+            pointObject.transform.SetParent(
+                pointsRoot,
+                false
+            );
 
             RectTransform pointRect =
                 pointObject.AddComponent<RectTransform>();
@@ -607,6 +635,33 @@ public sealed class CombatGestureGrid :
 
             AddPointLabel(pointObject.transform, index);
         }
+    }
+
+    private RectTransform CreateScaledVisualLayer(
+        string objectName)
+    {
+        GameObject layerObject = new(objectName);
+        layerObject.transform.SetParent(transform, false);
+
+        RectTransform rect =
+            layerObject.AddComponent<RectTransform>();
+        rect.anchorMin = rect.anchorMax =
+            new Vector2(0.5f, 0f);
+        rect.pivot = new Vector2(0.5f, 0f);
+        rect.sizeDelta = padSize;
+
+        float safeVisualScale =
+            Mathf.Clamp(visualScale, 0.5f, 1f);
+        rect.anchoredPosition = new Vector2(
+            0f,
+            padSize.y * (1f - safeVisualScale) * 0.5f
+        );
+        rect.localScale = new Vector3(
+            safeVisualScale,
+            safeVisualScale,
+            1f
+        );
+        return rect;
     }
 
     private static void AddPointLabel(
@@ -656,7 +711,8 @@ public sealed class CombatGestureGrid :
         ribbon.SetPath(
             traceLocalSamples,
             currentPointerLocalPosition,
-            traceLineWidth,
+            traceLineWidth *
+            Mathf.Clamp(visualScale, 0.5f, 1f),
             traceColor,
             traceRoundSegments
         );
