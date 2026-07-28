@@ -24,6 +24,7 @@ public static class V061PlayModeValidation
     private static FighterCombat opponent;
     private static Vector3 stationaryOpponentPosition;
     private static Quaternion stableCameraRotation;
+    private static Vector2 stablePlayerViewport;
 
     static V061PlayModeValidation()
     {
@@ -173,6 +174,13 @@ public static class V061PlayModeValidation
             ),
             "Runtime forward dodge missed its exact anchor."
         );
+        cameraController.ResetCameraView(true);
+        stableCameraRotation =
+            Camera.main.transform.rotation;
+        stablePlayerViewport =
+            Camera.main.WorldToViewportPoint(
+                player.transform.position
+            );
         stationaryOpponentPosition =
             opponent.transform.position;
         Require(
@@ -212,6 +220,7 @@ public static class V061PlayModeValidation
             "Runtime camera did not rotate with the player."
         );
         RequireCameraBehindPlayer("runtime strafe");
+        RequirePlayerScreenAnchor("runtime strafe");
         cameraController.ResetCameraView(true);
         RequirePairVisible("runtime strafe");
 
@@ -318,6 +327,26 @@ public static class V061PlayModeValidation
         Require(
             Vector3.Dot(playerToCamera, duelForward) <= -0.4f,
             $"Camera is not behind the player at {situation}."
+        );
+    }
+
+    private static void RequirePlayerScreenAnchor(
+        string situation)
+    {
+        Vector2 actualViewport =
+            Camera.main.WorldToViewportPoint(
+                player.transform.position
+            );
+        Require(
+            Vector2.Distance(
+                stablePlayerViewport,
+                actualViewport
+            ) <= PositionTolerance,
+            $"Player screen anchor drifted at {situation}. " +
+            $"Expected=({stablePlayerViewport.x:F3}, " +
+            $"{stablePlayerViewport.y:F3}), " +
+            $"Actual=({actualViewport.x:F3}, " +
+            $"{actualViewport.y:F3})."
         );
     }
 

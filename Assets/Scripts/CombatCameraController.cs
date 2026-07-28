@@ -6,16 +6,8 @@ using EnhancedTouch = UnityEngine.InputSystem.EnhancedTouch;
 public sealed class CombatCameraController : MonoBehaviour
 {
     [Header("Cadrage automatique")]
-    [Range(0f, 0.45f)]
-    [SerializeField] private float opponentFramingBias = 0.18f;
-    [Range(0.2f, 0.75f)]
-    [SerializeField] private float maximumOpponentFramingBias = 0.65f;
-    [Range(0.01f, 0.2f)]
-    [SerializeField] private float framingBiasStep = 0.05f;
     [Min(0f)]
     [SerializeField] private float worldFramingMargin = 0.8f;
-    [Min(0.01f)]
-    [SerializeField] private float followSmoothTime = 0.12f;
     [Min(0.01f)]
     [SerializeField] private float zoomSmoothTime = 0.12f;
 
@@ -38,7 +30,6 @@ public sealed class CombatCameraController : MonoBehaviour
     private Vector3 neutralPlayerOffset;
     private Vector3 manualPanOffset;
     private Vector3 shakeOffset;
-    private Vector3 followVelocity;
     private float neutralZoom;
     private float manualZoomOffset;
     private float zoomVelocity;
@@ -133,7 +124,6 @@ public sealed class CombatCameraController : MonoBehaviour
         manualPanOffset = Vector3.zero;
         manualZoomOffset = 0f;
         shakeOffset = Vector3.zero;
-        followVelocity = Vector3.zero;
         zoomVelocity = 0f;
         CancelTransientInput();
 
@@ -161,9 +151,12 @@ public sealed class CombatCameraController : MonoBehaviour
 
         Vector3 right = combatCamera.transform.right;
         Vector3 up = combatCamera.transform.up;
-        manualPanOffset +=
+        Vector3 worldPanDelta =
             (-right * normalizedDelta.x -
              up * normalizedDelta.y) * panSensitivity;
+        manualPanOffset +=
+            Quaternion.Inverse(CalculateDuelFrameRotation()) *
+            worldPanDelta;
     }
 
     internal void ApplyPinchDelta(float normalizedDelta)
@@ -233,15 +226,10 @@ public sealed class CombatCameraController : MonoBehaviour
     {
         Vector3 targetPosition = CalculateTargetPosition();
         Quaternion targetRotation = CalculateTargetRotation();
-        combatCamera.transform.position = Vector3.SmoothDamp(
-            combatCamera.transform.position,
-            targetPosition + shakeOffset,
-            ref followVelocity,
-            followSmoothTime,
-            Mathf.Infinity,
-            Mathf.Max(0.0001f, deltaTime)
+        combatCamera.transform.SetPositionAndRotation(
+            targetPosition + targetRotation * shakeOffset,
+            targetRotation
         );
-        combatCamera.transform.rotation = targetRotation;
 
         float targetZoom = CalculateTargetZoom(
             targetPosition,
@@ -276,7 +264,7 @@ public sealed class CombatCameraController : MonoBehaviour
         Vector3 targetPosition = CalculateTargetPosition();
         Quaternion targetRotation = CalculateTargetRotation();
         combatCamera.transform.SetPositionAndRotation(
-            targetPosition,
+            targetPosition + targetRotation * shakeOffset,
             targetRotation
         );
         float targetZoom = CalculateTargetZoom(
@@ -292,60 +280,10 @@ public sealed class CombatCameraController : MonoBehaviour
     private Vector3 CalculateTargetPosition()
     {
         Vector3 playerPosition = GetNeutralPosition(player);
-        if (opponent == null)
-        {
-            return playerPosition +
-                CalculateDuelFrameRotation() *
-                neutralPlayerOffset +
-                manualPanOffset;
-        }
-
-        Vector3 opponentPosition = GetNeutralPosition(opponent);
-        float bias = Mathf.Clamp(
-            opponentFramingBias,
-            0f,
-            maximumOpponentFramingBias
-        );
-        Vector3 automaticPosition =
-            CalculatePositionForBias(
-                playerPosition,
-                opponentPosition,
-                bias
-            );
-        float maximumBias = Mathf.Max(
-            bias,
-            maximumOpponentFramingBias
-        );
-        float safeStep = Mathf.Max(0.01f, framingBiasStep);
-        Quaternion targetRotation = CalculateTargetRotation();
-        while (bias + 0.0001f < maximumBias &&
-               RequiredAutomaticZoom(
-                   automaticPosition,
-                   targetRotation
-               ) >
-                   maximumZoom)
-        {
-            bias = Mathf.Min(maximumBias, bias + safeStep);
-            automaticPosition = CalculatePositionForBias(
-                playerPosition,
-                opponentPosition,
-                bias
-            );
-        }
-
-        return automaticPosition + manualPanOffset;
-    }
-
-    private Vector3 CalculatePositionForBias(
-        Vector3 playerPosition,
-        Vector3 opponentPosition,
-        float bias)
-    {
-        return Vector3.Lerp(
-            playerPosition,
-            opponentPosition,
-            bias
-        ) + CalculateDuelFrameRotation() * neutralPlayerOffset;
+        Quaternion duelRotation = CalculateDuelFrameRotation();
+        return playerPosition +
+            duelRotation *
+            (neutralPlayerOffset + manualPanOffset);
     }
 
     private float RequiredAutomaticZoom(

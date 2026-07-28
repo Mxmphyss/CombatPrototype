@@ -377,6 +377,10 @@ public static class V061CorrectionValidation
             "Camera zoom escaped its configured limits."
         );
         Quaternion initialRotation = camera.transform.rotation;
+        Vector3 initialPlayerViewport =
+            camera.WorldToViewportPoint(
+                context.FirstCombat.transform.position
+            );
         RequirePairVisible(camera, context, "MidRange");
         RequireCameraBehindPlayer(
             camera,
@@ -421,6 +425,12 @@ public static class V061CorrectionValidation
         RequireCameraBehindPlayer(
             camera,
             context,
+            "left flank"
+        );
+        RequirePlayerScreenAnchor(
+            camera,
+            context,
+            initialPlayerViewport,
             "left flank"
         );
         Require(
@@ -492,6 +502,12 @@ public static class V061CorrectionValidation
             context,
             "prolonged strafe"
         );
+        RequirePlayerScreenAnchor(
+            camera,
+            context,
+            initialPlayerViewport,
+            "prolonged strafe"
+        );
         context.Controller.StopAllMovement();
         context.Controller.ResetDuel();
         UnityEngine.Object.DestroyImmediate(cameraObject);
@@ -541,6 +557,29 @@ public static class V061CorrectionValidation
         Require(
             Vector3.Dot(playerToCamera, duelForward) <= -0.5f,
             $"Camera is not behind the player at {situation}."
+        );
+    }
+
+    private static void RequirePlayerScreenAnchor(
+        Camera camera,
+        ValidationContext context,
+        Vector3 expectedViewport,
+        string situation)
+    {
+        Vector3 actualViewport =
+            camera.WorldToViewportPoint(
+                context.FirstCombat.transform.position
+            );
+        Require(
+            Vector2.Distance(
+                expectedViewport,
+                actualViewport
+            ) <= Tolerance,
+            $"Player screen anchor drifted at {situation}. " +
+            $"Expected=({expectedViewport.x:F3}, " +
+            $"{expectedViewport.y:F3}), " +
+            $"Actual=({actualViewport.x:F3}, " +
+            $"{actualViewport.y:F3})."
         );
     }
 
