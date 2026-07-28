@@ -219,7 +219,7 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
 
         PlayTargetFlash(target);
 
-        if (!recoilEnabled)
+        if (!recoilEnabled || target.IsDodging)
             return;
 
         Vector3 away = target.transform.position -

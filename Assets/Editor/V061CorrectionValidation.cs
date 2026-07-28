@@ -18,6 +18,8 @@ public static class V061CorrectionValidation
             ValidateTransactionalCancellation(context);
             ValidateLateralOrientation(context);
             ValidateSymmetricAttackOrientation(context);
+            ValidateDodgeTimingWindows(context);
+            ValidateDodgePreservesOtherAnimation(context);
             ValidateCyclicPermutation(context);
             ValidateGestureShapes();
             ValidateCameraReset(context);
@@ -250,27 +252,19 @@ public static class V061CorrectionValidation
             "The fighter with flank advantage must be able to attack."
         );
         Require(
-            !context.Controller.CanAttackTarget(
+            context.Controller.CanAttackTarget(
                 context.SecondCombat,
                 context.FirstCombat
             ),
-            "The disadvantaged fighter must face the target before attacking."
+            "A fighter must be allowed to attack in its facing direction."
         );
-
-        float staminaBefore =
-            context.SecondCombat.Stats.CurrentStamina;
-        CombatActionResult refusedAttack =
-            context.SecondCombat.LightAttack();
         Require(
-            refusedAttack == CombatActionResult.Unavailable &&
-            context.SecondCombat.LastRefusalReason ==
-                CombatRefusalReason.IncompatibleOrientation,
-            "A disadvantaged attack was not refused by orientation."
+            context.FirstCombat.CanHitCurrentTarget(),
+            "The fighter facing the flank target must be able to hit."
         );
-        RequireNear(
-            context.SecondCombat.Stats.CurrentStamina,
-            staminaBefore,
-            "A refused positional attack consumed stamina."
+        Require(
+            !context.SecondCombat.CanHitCurrentTarget(),
+            "A forward attack incorrectly hit a target on the flank."
         );
 
         Require(
@@ -292,17 +286,117 @@ public static class V061CorrectionValidation
         Require(
             context.Controller.CurrentOrientation ==
                 RelativeOrientation.Face &&
-            context.Controller.CanAttackTarget(
-                context.FirstCombat,
-                context.SecondCombat
-            ) &&
-            context.Controller.CanAttackTarget(
-                context.SecondCombat,
-                context.FirstCombat
-            ),
-            "Both fighters must be able to attack after facing again."
+            context.FirstCombat.CanHitCurrentTarget() &&
+            context.SecondCombat.CanHitCurrentTarget(),
+            "Both forward attack arcs must contain the target after facing."
         );
 
+        context.Controller.ResetDuel();
+    }
+
+    private static void ValidateDodgeTimingWindows(
+        ValidationContext context)
+    {
+        FighterCombat fighter = context.FirstCombat;
+        RequireNear(
+            fighter.DodgeStartupDuration,
+            0.08f,
+            "The dodge vulnerable startup must be 0.08 seconds."
+        );
+        RequireNear(
+            fighter.DodgeInvulnerabilityDuration,
+            0.24f,
+            "The dodge invulnerability must be 0.24 seconds."
+        );
+        RequireNear(
+            fighter.PerfectDodgeWindow,
+            0.1f,
+            "The perfect dodge window must be 0.10 seconds."
+        );
+        RequireNear(
+            fighter.DodgeRecoveryDuration,
+            0.12f,
+            "The dodge recovery must be 0.12 seconds."
+        );
+
+        Require(
+            fighter.GetDodgeWindowPhase(0.04f) ==
+                DodgeWindowPhase.StartupVulnerable,
+            "An early dodge impact must remain vulnerable."
+        );
+        Require(
+            fighter.GetDodgeWindowPhase(0.09f) ==
+                DodgeWindowPhase.Invulnerable,
+            "The dodge did not enter its invulnerability window."
+        );
+        Require(
+            fighter.GetDodgeWindowPhase(0.2f) ==
+                DodgeWindowPhase.Perfect,
+            "The centre of the dodge is not the perfect window."
+        );
+        Require(
+            fighter.GetDodgeWindowPhase(0.31f) ==
+                DodgeWindowPhase.Invulnerable,
+            "The end of the invulnerability window is incorrect."
+        );
+        Require(
+            fighter.GetDodgeWindowPhase(0.33f) ==
+                DodgeWindowPhase.RecoveryVulnerable,
+            "A late dodge impact must be vulnerable."
+        );
+    }
+
+    private static void ValidateDodgePreservesOtherAnimation(
+        ValidationContext context)
+    {
+        context.Controller.ResetDuel();
+        Vector3 animatedOpponentPosition =
+            context.SecondCombat.transform.position +
+            context.SecondCombat.transform.forward * 0.4f;
+        context.SecondCombat.transform.position =
+            animatedOpponentPosition;
+
+        Require(
+            context.Controller.TryPrepareDodge(
+                context.FirstCombat,
+                DodgeDirection.Left,
+                out SpatialDodgeTransaction transaction
+            ),
+            "Unable to prepare the dodge animation isolation test."
+        );
+        Require(
+            context.Controller.PreviewPreparedDodge(
+                transaction.Id,
+                0.5f
+            ),
+            "Unable to preview the dodge animation isolation test."
+        );
+        Require(
+            Vector3.Distance(
+                animatedOpponentPosition,
+                context.SecondCombat.transform.position
+            ) <= Tolerance,
+            "Dodge preview erased the opponent attack animation."
+        );
+        context.Controller.PreviewPreparedDodge(
+            transaction.Id,
+            1f
+        );
+        Require(
+            context.Controller.CommitDodge(transaction),
+            "Unable to commit the dodge animation isolation test."
+        );
+        Require(
+            Vector3.Distance(
+                animatedOpponentPosition,
+                context.SecondCombat.transform.position
+            ) <= Tolerance,
+            "Dodge commit visibly corrected the opponent animation."
+        );
+
+        context.Controller.RestoreNeutralPose(
+            context.SecondCombat
+        );
         context.Controller.ResetDuel();
     }
 

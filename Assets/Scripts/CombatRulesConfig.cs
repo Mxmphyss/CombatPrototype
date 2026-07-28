@@ -72,6 +72,19 @@ public sealed class CombatRulesConfig : ScriptableObject
     [SerializeField] private float dodgeSpatialSpeed = 12f;
     [Range(0f, 180f)]
     [SerializeField] private float dodgeOrientationAngle = 90f;
+    [Min(0f)]
+    [SerializeField] private float dodgeStartupDuration = 0.08f;
+    [Min(MinimumPositiveValue)]
+    [SerializeField]
+    private float dodgeInvulnerabilityDuration = 0.24f;
+    [Min(0f)]
+    [SerializeField] private float perfectDodgeWindow = 0.1f;
+    [Min(0f)]
+    [SerializeField] private float dodgeRecoveryDuration = 0.12f;
+
+    [Header("Direction des attaques")]
+    [Range(1f, 360f)]
+    [SerializeField] private float attackHitArc = 100f;
 
     [Header("Orientation et degats positionnels")]
     [Min(0f)]
@@ -154,6 +167,23 @@ public sealed class CombatRulesConfig : ScriptableObject
         Mathf.Max(MinimumPositiveValue, dodgeSpatialSpeed);
     public float DodgeOrientationAngle =>
         Mathf.Clamp(dodgeOrientationAngle, 0f, 180f);
+    public float DodgeStartupDuration =>
+        Mathf.Max(0f, dodgeStartupDuration);
+    public float DodgeInvulnerabilityDuration =>
+        Mathf.Max(
+            MinimumPositiveValue,
+            dodgeInvulnerabilityDuration
+        );
+    public float PerfectDodgeWindow =>
+        Mathf.Clamp(
+            perfectDodgeWindow,
+            0f,
+            DodgeInvulnerabilityDuration
+        );
+    public float DodgeRecoveryDuration =>
+        Mathf.Max(0f, dodgeRecoveryDuration);
+    public float AttackHitArc =>
+        Mathf.Clamp(attackHitArc, 1f, 360f);
     public float FlankAutoFaceDelay =>
         Mathf.Max(0f, flankAutoFaceDelay);
     public float FlankDamageMultiplier =>
@@ -335,6 +365,23 @@ public sealed class CombatRulesConfig : ScriptableObject
             );
         dodgeOrientationAngle =
             Mathf.Clamp(dodgeOrientationAngle, 0f, 180f);
+        dodgeStartupDuration =
+            Mathf.Max(0f, dodgeStartupDuration);
+        dodgeInvulnerabilityDuration =
+            Mathf.Max(
+                MinimumPositiveValue,
+                dodgeInvulnerabilityDuration
+            );
+        perfectDodgeWindow =
+            Mathf.Clamp(
+                perfectDodgeWindow,
+                0f,
+                dodgeInvulnerabilityDuration
+            );
+        dodgeRecoveryDuration =
+            Mathf.Max(0f, dodgeRecoveryDuration);
+        attackHitArc =
+            Mathf.Clamp(attackHitArc, 1f, 360f);
         flankAutoFaceDelay =
             Mathf.Max(0f, flankAutoFaceDelay);
         flankDamageMultiplier =

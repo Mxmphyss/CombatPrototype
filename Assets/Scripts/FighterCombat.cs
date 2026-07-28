@@ -34,12 +34,22 @@ public enum FighterStunReason
 public enum CombatHitResult
 {
     Hit,
+    Missed,
     Blocked,
     GuardBroken,
     PerfectGuard,
     Dodged,
     PerfectDodge,
     Interrupted
+}
+
+public enum DodgeWindowPhase
+{
+    None,
+    StartupVulnerable,
+    Invulnerable,
+    Perfect,
+    RecoveryVulnerable
 }
 
 public readonly struct CombatImpact
@@ -144,12 +154,6 @@ public class FighterCombat : MonoBehaviour
     [FormerlySerializedAs("dodgeDuration")]
     [Min(0.01f)]
     [SerializeField] private float dodgeMovementDuration = 0.18f;
-    [Min(0.01f)]
-    [SerializeField] private float dodgeActiveDuration = 0.4f;
-    [Min(0f)]
-    [SerializeField] private float perfectDodgeWindow = 0.2f;
-    [Min(0f)]
-    [SerializeField] private float dodgeRecoveryDuration = 0.12f;
 
     public event Action<FighterCombat, FighterCombatState>
         OnStateChanged;
@@ -202,6 +206,30 @@ public class FighterCombat : MonoBehaviour
         incomingImpactRevision;
     public CombatSpatialController SpatialController =>
         spatialController;
+    public float DodgeStartupDuration =>
+        Rules.DodgeStartupDuration;
+    public float DodgeInvulnerabilityDuration =>
+        Rules.DodgeInvulnerabilityDuration;
+    public float PerfectDodgeWindow =>
+        Rules.PerfectDodgeWindow;
+    public float DodgeRecoveryDuration =>
+        Rules.DodgeRecoveryDuration;
+    public DodgeWindowPhase CurrentDodgeWindowPhase
+    {
+        get
+        {
+            if (float.IsNegativeInfinity(dodgeStartedAt) ||
+                (CurrentState != FighterCombatState.Dodging &&
+                 CurrentState != FighterCombatState.Recovering))
+            {
+                return DodgeWindowPhase.None;
+            }
+
+            return GetDodgeWindowPhase(
+                Time.time - dodgeStartedAt
+            );
+        }
+    }
 
     private bool combatEnabled = true;
     private bool heldGuardActive;
@@ -276,19 +304,6 @@ public class FighterCombat : MonoBehaviour
                 CombatActionResult.Busy,
                 CombatRefusalReason.Busy
             );
-
-        if (spatialController != null &&
-            targetCombat != null &&
-            !spatialController.CanAttackTarget(
-                this,
-                targetCombat
-            ))
-        {
-            return Refuse(
-                CombatActionResult.Unavailable,
-                CombatRefusalReason.IncompatibleOrientation
-            );
-        }
 
         if (!fighterStats.SpendStamina(lightAttackStaminaCost))
         {
@@ -430,6 +445,66 @@ public class FighterCombat : MonoBehaviour
     public CombatActionResult DodgeBackward()
     {
         return StartDodge(DodgeDirection.Backward);
+    }
+
+    public bool CanHitCurrentTarget()
+    {
+        if (targetCombat == null)
+            return targetStats != null;
+
+        if (spatialController != null)
+        {
+            return spatialController.IsTargetInsideAttackArc(
+                this,
+                targetCombat,
+                Rules.AttackHitArc
+            );
+        }
+
+        return IsInsideAttackArc(
+            transform,
+            targetCombat.transform,
+            Rules.AttackHitArc
+        );
+    }
+
+    public DodgeWindowPhase GetDodgeWindowPhase(
+        float elapsed)
+    {
+        if (elapsed < 0f)
+            return DodgeWindowPhase.None;
+
+        float startup = DodgeStartupDuration;
+        if (elapsed < startup)
+            return DodgeWindowPhase.StartupVulnerable;
+
+        float invulnerability =
+            DodgeInvulnerabilityDuration;
+        float invulnerabilityElapsed =
+            elapsed - startup;
+        if (invulnerabilityElapsed >
+            invulnerability)
+        {
+            return DodgeWindowPhase.RecoveryVulnerable;
+        }
+
+        float perfectWindow =
+            Mathf.Min(
+                PerfectDodgeWindow,
+                invulnerability
+            );
+        float perfectStart =
+            (invulnerability - perfectWindow) * 0.5f;
+        float perfectEnd =
+            perfectStart + perfectWindow;
+        if (perfectWindow > 0f &&
+            invulnerabilityElapsed >= perfectStart &&
+            invulnerabilityElapsed <= perfectEnd)
+        {
+            return DodgeWindowPhase.Perfect;
+        }
+
+        return DodgeWindowPhase.Invulnerable;
     }
 
     public CombatActionResult StartSpatialMovement(
@@ -783,6 +858,9 @@ public class FighterCombat : MonoBehaviour
                 return CombatHitResult.Interrupted;
             }
 
+            if (!CanHitCurrentTarget())
+                return CombatHitResult.Missed;
+
             CombatHitResult result =
                 targetCombat.ResolveIncomingAttack(
                 impactTime,
@@ -807,24 +885,16 @@ public class FighterCombat : MonoBehaviour
         if (CurrentState == FighterCombatState.Dodging)
         {
             float dodgeElapsed = impactTime - dodgeStartedAt;
-            float perfectCenter = dodgeActiveDuration * 0.5f;
-            float halfWindow = perfectDodgeWindow * 0.5f;
+            DodgeWindowPhase phase =
+                GetDodgeWindowPhase(dodgeElapsed);
 
-            if (Mathf.Abs(dodgeElapsed - perfectCenter) <=
-                halfWindow)
+            if (phase == DodgeWindowPhase.Perfect)
             {
                 return CombatHitResult.PerfectDodge;
             }
 
-            return CombatHitResult.Dodged;
-        }
-
-        if (hasActiveSpatialDodge)
-        {
-            CancelPendingDodge();
-            StopAllCoroutines();
-            simpleDefenseRoutine = null;
-            ForceState(FighterCombatState.Idle);
+            if (phase == DodgeWindowPhase.Invulnerable)
+                return CombatHitResult.Dodged;
         }
 
         bool defenseAllowed =
@@ -1129,6 +1199,16 @@ public class FighterCombat : MonoBehaviour
                 );
                 yield return null;
             }
+
+            spatialController.PreviewPreparedDodge(
+                activeSpatialDodge.Id,
+                1f
+            );
+            spatialController.CommitDodge(
+                activeSpatialDodge
+            );
+            hasActiveSpatialDodge = false;
+            activeSpatialDodge = default;
         }
         else
         {
@@ -1156,24 +1236,25 @@ public class FighterCombat : MonoBehaviour
             transform.position = startPosition;
         }
 
-        float remainingActiveTime =
-            Mathf.Max(0f, dodgeActiveDuration - movementDuration);
-        if (remainingActiveTime > 0f)
-            yield return new WaitForSeconds(remainingActiveTime);
-
-        SetState(FighterCombatState.Recovering);
-        if (dodgeRecoveryDuration > 0f)
-            yield return new WaitForSeconds(
-                dodgeRecoveryDuration
-            );
-
-        if (hasActiveSpatialDodge)
+        float protectionEnd =
+            DodgeStartupDuration +
+            DodgeInvulnerabilityDuration;
+        float remainingProtectionTime =
+            Mathf.Max(0f, protectionEnd - movementDuration);
+        if (remainingProtectionTime > 0f)
         {
-            spatialController.CommitDodge(activeSpatialDodge);
-            hasActiveSpatialDodge = false;
-            activeSpatialDodge = default;
+            yield return new WaitForSeconds(
+                remainingProtectionTime
+            );
         }
 
+        SetState(FighterCombatState.Recovering);
+        if (DodgeRecoveryDuration > 0f)
+            yield return new WaitForSeconds(
+                DodgeRecoveryDuration
+            );
+
+        dodgeStartedAt = float.NegativeInfinity;
         SetIdleIfAvailable();
     }
 
@@ -1235,27 +1316,48 @@ public class FighterCombat : MonoBehaviour
 
     private Vector3 GetCurrentAttackOffset()
     {
-        Vector3 neutralPosition = GetNeutralPosition();
-        Vector3 targetPosition =
-            targetStats != null
-                ? targetStats.transform.position
-                : neutralPosition;
-
+        Quaternion neutralRotation = transform.rotation;
         if (spatialController != null &&
-            targetCombat != null &&
-            spatialController.TryGetNeutralPosition(
-                targetCombat,
-                out Vector3 targetNeutralPosition
+            spatialController.TryGetNeutralPose(
+                this,
+                out Pose neutralPose
             ))
         {
-            targetPosition = targetNeutralPosition;
+            neutralRotation = neutralPose.rotation;
         }
 
-        return Vector3.MoveTowards(
-            neutralPosition,
-            targetPosition,
-            1f
-        ) - neutralPosition;
+        Vector3 forward = Vector3.ProjectOnPlane(
+            neutralRotation * Vector3.forward,
+            Vector3.up
+        );
+        if (forward.sqrMagnitude <= 0.0001f)
+            forward = Vector3.forward;
+
+        return forward.normalized;
+    }
+
+    private static bool IsInsideAttackArc(
+        Transform attacker,
+        Transform target,
+        float fullArc)
+    {
+        Vector3 forward = Vector3.ProjectOnPlane(
+            attacker.forward,
+            Vector3.up
+        );
+        Vector3 toTarget = Vector3.ProjectOnPlane(
+            target.position - attacker.position,
+            Vector3.up
+        );
+        if (forward.sqrMagnitude <= 0.0001f ||
+            toTarget.sqrMagnitude <= 0.0001f)
+        {
+            return true;
+        }
+
+        float halfArc =
+            Mathf.Clamp(fullArc, 1f, 360f) * 0.5f;
+        return Vector3.Angle(forward, toTarget) <= halfArc;
     }
 
     private bool HasTargetImpactRevisionChanged(

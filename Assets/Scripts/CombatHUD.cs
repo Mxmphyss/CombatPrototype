@@ -556,6 +556,14 @@ public sealed class CombatHUD : MonoBehaviour
 
         switch (impact.Result)
         {
+            case CombatHitResult.Missed:
+                ShowMessage(
+                    "Attaque hors cible",
+                    new Color(0.76f, 0.78f, 0.84f),
+                    0.9f
+                );
+                break;
+
             case CombatHitResult.GuardBroken:
                 ShowMessage(
                     "Garde brisee",

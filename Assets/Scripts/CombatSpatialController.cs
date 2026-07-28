@@ -874,22 +874,33 @@ public sealed class CombatSpatialController : MonoBehaviour
             return false;
 
         float progress = Mathf.Clamp01(normalizedProgress);
-        ApplyPose(
-            firstFighter.transform,
-            LerpPose(
-                pendingDodge.FirstStartPose,
-                pendingDodge.FirstEndPose,
-                progress
-            )
+        Pose firstPreview = LerpPose(
+            pendingDodge.FirstStartPose,
+            pendingDodge.FirstEndPose,
+            progress
         );
-        ApplyPose(
-            secondFighter.transform,
-            LerpPose(
-                pendingDodge.SecondStartPose,
-                pendingDodge.SecondEndPose,
-                progress
-            )
+        Pose secondPreview = LerpPose(
+            pendingDodge.SecondStartPose,
+            pendingDodge.SecondEndPose,
+            progress
         );
+
+        if (pendingDodge.Fighter == firstFighter)
+        {
+            ApplyPose(firstFighter.transform, firstPreview);
+            ApplyRotation(
+                secondFighter.transform,
+                secondPreview.rotation
+            );
+        }
+        else
+        {
+            ApplyRotation(
+                firstFighter.transform,
+                firstPreview.rotation
+            );
+            ApplyPose(secondFighter.transform, secondPreview);
+        }
         return true;
     }
 
@@ -923,7 +934,7 @@ public sealed class CombatSpatialController : MonoBehaviour
         hasPendingDodge = false;
         pendingDodge = default;
 
-        ApplyNeutralPosesToTransforms();
+        ApplyCommittedDodgeTransforms(committed);
 
         Publish(
             CombatSpatialChangeReason.DodgeCommitted,
@@ -1021,6 +1032,16 @@ public sealed class CombatSpatialController : MonoBehaviour
         FighterCombat attacker,
         FighterCombat defender)
     {
+        // Starting an attack is never orientation-gated.
+        // The forward arc decides hit or miss at impact time.
+        return true;
+    }
+
+    public bool IsTargetInsideAttackArc(
+        FighterCombat attacker,
+        FighterCombat defender,
+        float fullArc)
+    {
         if (!IsInitialized ||
             !Contains(attacker) ||
             defender != GetOtherFighter(attacker))
@@ -1028,8 +1049,25 @@ public sealed class CombatSpatialController : MonoBehaviour
             return true;
         }
 
-        return relativeOrientation == RelativeOrientation.Face ||
-               advantageFighter == attacker;
+        Vector3 forward = Horizontal(
+            attacker.transform.forward
+        );
+        Vector3 toDefender = Horizontal(
+            defender.transform.position -
+            attacker.transform.position
+        );
+        if (forward.sqrMagnitude <= PositionEpsilon ||
+            toDefender.sqrMagnitude <= PositionEpsilon)
+        {
+            return true;
+        }
+
+        float halfArc =
+            Mathf.Clamp(fullArc, 1f, 360f) * 0.5f;
+        return Vector3.Angle(
+            forward,
+            toDefender
+        ) <= halfArc;
     }
 
     public RelativeOrientation GetAttackOrientation(
@@ -1509,12 +1547,9 @@ public sealed class CombatSpatialController : MonoBehaviour
         Vector3 rotatedRelative =
             Quaternion.AngleAxis(angle, Vector3.up) *
             relative;
-        Vector3 midpoint =
-            (fighterPosition + otherPosition) * 0.5f;
         Vector3 fighterEndPosition =
-            midpoint + rotatedRelative * 0.5f;
-        Vector3 otherEndPosition =
-            midpoint - rotatedRelative * 0.5f;
+            otherPosition + rotatedRelative;
+        Vector3 otherEndPosition = otherPosition;
         fighterEndPosition.y = fighterPosition.y;
         otherEndPosition.y = otherPosition.y;
 
@@ -2003,6 +2038,27 @@ public sealed class CombatSpatialController : MonoBehaviour
         ApplyPose(secondFighter.transform, secondNeutralPose);
     }
 
+    private void ApplyCommittedDodgeTransforms(
+        SpatialDodgeTransaction transaction)
+    {
+        if (transaction.Fighter == firstFighter)
+        {
+            ApplyPose(firstFighter.transform, firstNeutralPose);
+            ApplyRotation(
+                secondFighter.transform,
+                secondNeutralPose.rotation
+            );
+        }
+        else
+        {
+            ApplyRotation(
+                firstFighter.transform,
+                firstNeutralPose.rotation
+            );
+            ApplyPose(secondFighter.transform, secondNeutralPose);
+        }
+    }
+
     private bool NeutralTransformsMatch()
     {
         return TransformMatchesPose(
@@ -2087,6 +2143,16 @@ public sealed class CombatSpatialController : MonoBehaviour
         target.SetPositionAndRotation(
             pose.position,
             pose.rotation
+        );
+    }
+
+    private static void ApplyRotation(
+        Transform target,
+        Quaternion rotation)
+    {
+        target.SetPositionAndRotation(
+            target.position,
+            rotation
         );
     }
 

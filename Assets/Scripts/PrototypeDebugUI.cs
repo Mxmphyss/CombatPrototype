@@ -11,6 +11,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         new(0.72f, 0.35f, 0.14f, 0.96f);
 
     private EnemyAutoCombat enemyAI;
+    private FighterCombat playerCombat;
     private FighterStats playerStats;
     private CombatSpatialController spatialController;
     private CombatCameraController cameraController;
@@ -25,6 +26,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     private Text spatialStateLabel;
     private Text cameraResetLabel;
     private Text distanceToggleLabel;
+    private Text dodgeTimingLabel;
     private Text cameraStateLabel;
 
     public static PrototypeDebugUI Create(
@@ -92,6 +94,9 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     {
         enemyAI = enemyAutoCombat;
         playerStats = playerFighterStats;
+        playerCombat = playerStats != null
+            ? playerStats.GetComponent<FighterCombat>()
+            : null;
         spatialController = spatialAuthority;
         cameraController = cameraAuthority;
         distanceVisualizer = distanceDebug;
@@ -100,6 +105,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         BuildCameraReset();
         BuildDistanceToggle();
         BuildStaminaToggle();
+        BuildDodgeTimingState();
         BuildCameraState();
         BuildSpatialState();
 
@@ -128,6 +134,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     private void Update()
     {
         RefreshCameraState();
+        RefreshDodgeTimingState();
     }
 
     private void OnDestroy()
@@ -278,6 +285,69 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         cameraStateLabel.color =
             new Color(0.68f, 0.8f, 0.95f, 1f);
         cameraStateLabel.raycastTarget = false;
+    }
+
+    private void BuildDodgeTimingState()
+    {
+        GameObject labelObject =
+            new("Prototype Dodge Timing State");
+        labelObject.transform.SetParent(transform, false);
+        RectTransform rect =
+            labelObject.AddComponent<RectTransform>();
+        rect.anchorMin = rect.anchorMax =
+            new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = new Vector2(24f, -274f);
+        rect.sizeDelta = new Vector2(910f, 26f);
+        dodgeTimingLabel = labelObject.AddComponent<Text>();
+        dodgeTimingLabel.font =
+            Resources.GetBuiltinResource<Font>(
+                "LegacyRuntime.ttf"
+            );
+        dodgeTimingLabel.fontSize = 16;
+        dodgeTimingLabel.fontStyle = FontStyle.Bold;
+        dodgeTimingLabel.alignment =
+            TextAnchor.MiddleLeft;
+        dodgeTimingLabel.color =
+            new Color(0.9f, 0.78f, 0.36f, 1f);
+        dodgeTimingLabel.raycastTarget = false;
+        RefreshDodgeTimingState();
+    }
+
+    private void RefreshDodgeTimingState()
+    {
+        if (dodgeTimingLabel == null)
+            return;
+
+        if (playerCombat == null)
+        {
+            dodgeTimingLabel.text =
+                "ESQUIVE · timings indisponibles";
+            return;
+        }
+
+        float vulnerableEnd =
+            playerCombat.DodgeStartupDuration;
+        float invulnerableEnd =
+            vulnerableEnd +
+            playerCombat.DodgeInvulnerabilityDuration;
+        float perfectStart =
+            vulnerableEnd +
+            (playerCombat.DodgeInvulnerabilityDuration -
+             playerCombat.PerfectDodgeWindow) * 0.5f;
+        float perfectEnd =
+            perfectStart +
+            playerCombat.PerfectDodgeWindow;
+        float recoveryEnd =
+            invulnerableEnd +
+            playerCombat.DodgeRecoveryDuration;
+
+        dodgeTimingLabel.text =
+            $"ESQUIVE · vuln. 0-{vulnerableEnd:0.00}s" +
+            $" · invuln. {vulnerableEnd:0.00}-{invulnerableEnd:0.00}s" +
+            $" · parfaite {perfectStart:0.00}-{perfectEnd:0.00}s" +
+            $" · fin vuln. {invulnerableEnd:0.00}-{recoveryEnd:0.00}s" +
+            $" · {DodgePhaseLabel(playerCombat.CurrentDodgeWindowPhase)}";
     }
 
     private void RefreshCameraState()
@@ -558,6 +628,23 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             SpatialMovementType.StrafeRight =>
                 "Marche droite",
             _ => "Immobile"
+        };
+    }
+
+    private static string DodgePhaseLabel(
+        DodgeWindowPhase phase)
+    {
+        return phase switch
+        {
+            DodgeWindowPhase.StartupVulnerable =>
+                "VULNERABLE - DEBUT",
+            DodgeWindowPhase.Invulnerable =>
+                "INVULNERABLE",
+            DodgeWindowPhase.Perfect =>
+                "FENETRE PARFAITE",
+            DodgeWindowPhase.RecoveryVulnerable =>
+                "VULNERABLE - FIN",
+            _ => "PRETE"
         };
     }
 }
