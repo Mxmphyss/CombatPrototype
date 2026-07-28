@@ -11,6 +11,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         new(0.72f, 0.35f, 0.14f, 0.96f);
 
     private EnemyAutoCombat enemyAI;
+    private FighterStats playerStats;
     private CombatSpatialController spatialController;
     private CombatCameraController cameraController;
     private CombatDistanceDebugVisualizer distanceVisualizer;
@@ -18,6 +19,9 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     private Button aiToggleButton;
     private Image aiToggleImage;
     private Text aiToggleLabel;
+    private Button staminaToggleButton;
+    private Image staminaToggleImage;
+    private Text staminaToggleLabel;
     private Text spatialStateLabel;
     private Text cameraResetLabel;
     private Text distanceToggleLabel;
@@ -26,6 +30,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     public static PrototypeDebugUI Create(
         Transform parent,
         EnemyAutoCombat enemyAutoCombat,
+        FighterStats playerFighterStats,
         CombatGestureGrid gestureGrid,
         CombatSpatialController spatialAuthority = null,
         CombatCameraController cameraAuthority = null,
@@ -68,6 +73,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             panelObject.AddComponent<PrototypeDebugUI>();
         debugUI.Initialize(
             enemyAutoCombat,
+            playerFighterStats,
             gestureGrid,
             spatialAuthority,
             cameraAuthority,
@@ -78,12 +84,14 @@ public sealed class PrototypeDebugUI : MonoBehaviour
 
     private void Initialize(
         EnemyAutoCombat enemyAutoCombat,
+        FighterStats playerFighterStats,
         CombatGestureGrid gestureGrid,
         CombatSpatialController spatialAuthority,
         CombatCameraController cameraAuthority,
         CombatDistanceDebugVisualizer distanceDebug)
     {
         enemyAI = enemyAutoCombat;
+        playerStats = playerFighterStats;
         spatialController = spatialAuthority;
         cameraController = cameraAuthority;
         distanceVisualizer = distanceDebug;
@@ -91,6 +99,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         BuildAIToggle();
         BuildCameraReset();
         BuildDistanceToggle();
+        BuildStaminaToggle();
         BuildCameraState();
         BuildSpatialState();
 
@@ -111,6 +120,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
 
         RefreshAIToggle();
         RefreshDistanceToggle();
+        RefreshStaminaToggle();
         RefreshCameraState();
         RefreshSpatialState();
     }
@@ -140,6 +150,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         RefreshAIToggle();
         cameraController?.ResetCameraView(true);
         RefreshDistanceToggle();
+        RefreshStaminaToggle();
         RefreshSpatialState();
     }
 
@@ -307,6 +318,24 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             .onClick.AddListener(ToggleDistanceCircles);
     }
 
+    private void BuildStaminaToggle()
+    {
+        GameObject buttonObject =
+            CreatePrototypeButton(
+                "Prototype Infinite Stamina Toggle",
+                new Vector2(-20f, -172f),
+                new Vector2(330f, 44f),
+                out staminaToggleLabel
+            );
+        staminaToggleImage =
+            buttonObject.GetComponent<Image>();
+        staminaToggleButton =
+            buttonObject.GetComponent<Button>();
+        staminaToggleButton.onClick.AddListener(
+            ToggleInfiniteStamina
+        );
+    }
+
     private GameObject CreatePrototypeButton(
         string objectName,
         Vector2 anchoredPosition,
@@ -361,6 +390,17 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         RefreshDistanceToggle();
     }
 
+    private void ToggleInfiniteStamina()
+    {
+        if (playerStats == null)
+            return;
+
+        playerStats.SetInfiniteStamina(
+            !playerStats.HasInfiniteStamina
+        );
+        RefreshStaminaToggle();
+    }
+
     private void RefreshDistanceToggle()
     {
         if (distanceToggleLabel == null)
@@ -371,6 +411,32 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             distanceVisualizer.IsVisible
                 ? "Masquer les distances"
                 : "Afficher les distances";
+    }
+
+    private void RefreshStaminaToggle()
+    {
+        bool available = playerStats != null;
+        bool enabled =
+            available && playerStats.HasInfiniteStamina;
+
+        if (staminaToggleButton != null)
+            staminaToggleButton.interactable = available;
+
+        if (staminaToggleImage != null)
+        {
+            staminaToggleImage.color = enabled
+                ? EnabledColor
+                : PausedColor;
+        }
+
+        if (staminaToggleLabel != null)
+        {
+            staminaToggleLabel.text = !available
+                ? "ENDURANCE ILLIMITEE · INDISPONIBLE"
+                : enabled
+                    ? "ENDURANCE ILLIMITEE · ACTIVE"
+                    : "ENDURANCE ILLIMITEE · INACTIVE";
+        }
     }
 
     private void ToggleEnemyAI()

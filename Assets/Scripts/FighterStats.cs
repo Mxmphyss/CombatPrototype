@@ -25,8 +25,10 @@ public class FighterStats : MonoBehaviour
     public float MaxStamina => maxStamina;
     public bool IsDead => currentHealth <= 0f;
     public bool IsStaminaCritical => isStaminaCritical;
+    public bool HasInfiniteStamina => infiniteStamina;
 
     private bool deathRaised;
+    private bool infiniteStamina;
 
     private void Awake()
     {
@@ -78,7 +80,16 @@ public class FighterStats : MonoBehaviour
         if (amount <= 0f)
             return true;
 
-        if (IsDead || currentStamina + Mathf.Epsilon < amount)
+        if (IsDead)
+            return false;
+
+        if (infiniteStamina)
+        {
+            RestoreFullStamina();
+            return true;
+        }
+
+        if (currentStamina + Mathf.Epsilon < amount)
             return false;
 
         SetStaminaValue(currentStamina - amount);
@@ -89,6 +100,12 @@ public class FighterStats : MonoBehaviour
     {
         if (amount <= 0f || IsDead)
             return 0f;
+
+        if (infiniteStamina)
+        {
+            RestoreFullStamina();
+            return 0f;
+        }
 
         float previousStamina = currentStamina;
         SetStaminaValue(currentStamina - amount);
@@ -113,7 +130,20 @@ public class FighterStats : MonoBehaviour
         if (IsDead)
             return;
 
+        if (infiniteStamina)
+        {
+            RestoreFullStamina();
+            return;
+        }
+
         SetStaminaValue(value);
+    }
+
+    public void SetInfiniteStamina(bool enabled)
+    {
+        infiniteStamina = enabled;
+        if (infiniteStamina)
+            RestoreFullStamina();
     }
 
     public void ResetStats()
@@ -142,6 +172,12 @@ public class FighterStats : MonoBehaviour
         currentStamina = clamped;
         isStaminaCritical = currentStamina <= 0.1f;
         OnStaminaChanged?.Invoke(currentStamina, maxStamina);
+    }
+
+    private void RestoreFullStamina()
+    {
+        isStaminaCritical = false;
+        SetStaminaValue(maxStamina);
     }
 
     [ContextMenu("Test Damage - 20")]

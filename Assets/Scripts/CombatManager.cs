@@ -139,6 +139,7 @@ public sealed class CombatManager : MonoBehaviour
         prototypeDebugUI = PrototypeDebugUI.Create(
             hud.transform,
             enemyAI,
+            playerStats,
             hud.GestureGrid,
             spatialController,
             cameraController,
