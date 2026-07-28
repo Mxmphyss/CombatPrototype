@@ -178,7 +178,19 @@ public sealed class GestureDebugDisplay : MonoBehaviour
         bool recognized)
     {
         builder.Clear();
-        AppendZones(builder, eventData.Zones);
+        if (!SameZones(
+                eventData.RawZones,
+                eventData.NormalizedZones))
+        {
+            builder.Append("Brut ");
+            AppendZones(builder, eventData.RawZones);
+            builder.Append(" | Forme ");
+            AppendZones(builder, eventData.NormalizedZones);
+        }
+        else
+        {
+            AppendZones(builder, eventData.Zones);
+        }
 
         if (eventData.InputKind is
             GestureInputKind.Hold or
@@ -239,6 +251,25 @@ public sealed class GestureDebugDisplay : MonoBehaviour
         }
 
         return builder.ToString();
+    }
+
+    private static bool SameZones(
+        System.Collections.Generic.IReadOnlyList<int> left,
+        System.Collections.Generic.IReadOnlyList<int> right)
+    {
+        if (left == null || right == null ||
+            left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (int index = 0; index < left.Count; index++)
+        {
+            if (left[index] != right[index])
+                return false;
+        }
+
+        return true;
     }
 
     private void CompleteLine(string line)

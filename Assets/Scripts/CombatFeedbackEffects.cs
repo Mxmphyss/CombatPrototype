@@ -31,6 +31,7 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
     private FighterCombat player;
     private FighterCombat enemy;
     private CombatSpatialController spatialController;
+    private CombatCameraController cameraController;
     private Camera combatCamera;
     private Renderer playerRenderer;
     private Renderer enemyRenderer;
@@ -59,7 +60,8 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
         FighterCombat playerCombat,
         FighterCombat enemyCombat,
         Camera targetCamera,
-        CombatSpatialController spatialAuthority = null)
+        CombatSpatialController spatialAuthority = null,
+        CombatCameraController cameraAuthority = null)
     {
         Unsubscribe();
         ResetEffects();
@@ -67,6 +69,7 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
         player = playerCombat;
         enemy = enemyCombat;
         spatialController = spatialAuthority;
+        cameraController = cameraAuthority;
         combatCamera = targetCamera;
         playerRenderer = player.GetComponentInChildren<Renderer>();
         enemyRenderer = enemy.GetComponentInChildren<Renderer>();
@@ -108,7 +111,9 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
                 enemy.transform.localScale = enemyNeutralScale;
             }
             spatialController?.RestoreNeutralPoses();
-            if (combatCamera != null)
+            cameraController?.SetShakeOffset(Vector3.zero);
+            if (cameraController == null &&
+                combatCamera != null)
             {
                 combatCamera.transform.localPosition =
                     cameraStartPosition;
@@ -494,14 +499,21 @@ public sealed class CombatFeedbackEffects : MonoBehaviour
                 Random.insideUnitCircle *
                 cameraShakeStrength *
                 multiplier;
-            combatCamera.transform.localPosition =
-                cameraStartPosition +
-                new Vector3(offset.x, offset.y, 0f);
+            Vector3 shake =
+                new(offset.x, offset.y, 0f);
+            if (cameraController != null)
+                cameraController.SetShakeOffset(shake);
+            else
+                combatCamera.transform.localPosition =
+                    cameraStartPosition + shake;
             yield return null;
         }
 
-        combatCamera.transform.localPosition =
-            cameraStartPosition;
+        if (cameraController != null)
+            cameraController.SetShakeOffset(Vector3.zero);
+        else
+            combatCamera.transform.localPosition =
+                cameraStartPosition;
         cameraShakeRoutine = null;
     }
 

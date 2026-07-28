@@ -28,7 +28,9 @@ public enum SpatialMovementType
 public enum DodgeDirection
 {
     Left = 0,
-    Right = 1
+    Right = 1,
+    Forward = 2,
+    Backward = 3
 }
 
 public enum CombatSpatialChangeReason
@@ -119,6 +121,16 @@ public sealed class CombatSpatialSettings
     {
         get => maximumDistance;
         set => maximumDistance = value;
+    }
+
+    public float GetDistance(DistanceLevel level)
+    {
+        return level switch
+        {
+            DistanceLevel.CloseRange => minimumDistance,
+            DistanceLevel.LongRange => maximumDistance,
+            _ => midRangeDistance
+        };
     }
 
     public float AdvanceSpeed
@@ -333,6 +345,8 @@ public readonly struct SpatialDodgeTransaction
     public DodgeDirection Direction { get; }
     public RelativeOrientation OrientationBefore { get; }
     public RelativeOrientation OrientationAfter { get; }
+    public DistanceLevel DistanceBefore { get; }
+    public DistanceLevel DistanceAfter { get; }
     public Pose FirstStartPose { get; }
     public Pose SecondStartPose { get; }
     public Pose FirstEndPose { get; }
@@ -349,6 +363,8 @@ public readonly struct SpatialDodgeTransaction
         DodgeDirection direction,
         RelativeOrientation orientationBefore,
         RelativeOrientation orientationAfter,
+        DistanceLevel distanceBefore,
+        DistanceLevel distanceAfter,
         Pose firstStartPose,
         Pose secondStartPose,
         Pose firstEndPose,
@@ -363,6 +379,8 @@ public readonly struct SpatialDodgeTransaction
         Direction = direction;
         OrientationBefore = orientationBefore;
         OrientationAfter = orientationAfter;
+        DistanceBefore = distanceBefore;
+        DistanceAfter = distanceAfter;
         FirstStartPose = firstStartPose;
         SecondStartPose = secondStartPose;
         FirstEndPose = firstEndPose;
@@ -544,6 +562,37 @@ public sealed class CombatSpatialController : MonoBehaviour
         return current >= lower && current <= upper;
     }
 
+    public float GetDistance(DistanceLevel level)
+    {
+        return settings.GetDistance(level);
+    }
+
+    public bool CanDodge(
+        FighterCombat fighter,
+        DodgeDirection direction)
+    {
+        if (!IsInitialized ||
+            !combatEnabled ||
+            hasPendingDodge ||
+            !Contains(fighter) ||
+            !IsKnownDodgeDirection(direction))
+        {
+            return false;
+        }
+
+        if (direction == DodgeDirection.Forward)
+            return distanceLevel != DistanceLevel.CloseRange;
+        if (direction == DodgeDirection.Backward)
+            return distanceLevel != DistanceLevel.LongRange;
+
+        return TryResolveDodgeTransition(
+            fighter,
+            direction,
+            out _,
+            out _
+        );
+    }
+
     private void Awake()
     {
         settings ??= new CombatSpatialSettings();
@@ -639,9 +688,6 @@ public sealed class CombatSpatialController : MonoBehaviour
         {
             NormalizeResetPosesToMidRange();
             ConstrainNeutralDistance();
-            distanceLevel = ResolveDistanceLevel(
-                GetHorizontalSeparation()
-            );
             ApplyNeutralPosesToTransforms();
         }
 
@@ -670,6 +716,9 @@ public sealed class CombatSpatialController : MonoBehaviour
             StopMovement(fighter);
             return true;
         }
+
+        if (!IsStrafe(movement))
+            return false;
 
         if (IsStrafe(movement) &&
             relativeOrientation != RelativeOrientation.Face)
@@ -753,11 +802,26 @@ public sealed class CombatSpatialController : MonoBehaviour
             return false;
         }
 
-        if (!TryResolveDodgeTransition(
-                fighter,
-                direction,
-                out RelativeOrientation orientationAfter,
-                out FighterCombat advantageAfter))
+        RelativeOrientation orientationAfter =
+            relativeOrientation;
+        FighterCombat advantageAfter = advantageFighter;
+        DistanceLevel distanceAfter = distanceLevel;
+
+        if (direction is DodgeDirection.Forward or
+            DodgeDirection.Backward)
+        {
+            distanceAfter = ResolveDodgeDistance(
+                distanceLevel,
+                direction
+            );
+            if (distanceAfter == distanceLevel)
+                return false;
+        }
+        else if (!TryResolveDodgeTransition(
+                     fighter,
+                     direction,
+                     out orientationAfter,
+                     out advantageAfter))
         {
             return false;
         }
@@ -783,6 +847,8 @@ public sealed class CombatSpatialController : MonoBehaviour
             direction,
             relativeOrientation,
             orientationAfter,
+            distanceLevel,
+            distanceAfter,
             firstNeutralPose,
             secondNeutralPose,
             firstEndPose,
@@ -840,19 +906,23 @@ public sealed class CombatSpatialController : MonoBehaviour
         secondNeutralPose = committed.SecondEndPose;
         relativeOrientation =
             committed.OrientationAfter;
+        distanceLevel = committed.DistanceAfter;
         advantageFighter =
             committed.AdvantageAfterCommit;
-        flankDodgeDirection =
-            relativeOrientation == RelativeOrientation.Face
-                ? null
-                : committed.Direction;
+        if (relativeOrientation == RelativeOrientation.Face)
+        {
+            flankDodgeDirection = null;
+        }
+        else if (committed.Direction is
+                 DodgeDirection.Left or
+                 DodgeDirection.Right)
+        {
+            flankDodgeDirection = committed.Direction;
+        }
         flankElapsed = 0f;
         hasPendingDodge = false;
         pendingDodge = default;
 
-        distanceLevel = ResolveDistanceLevel(
-            GetHorizontalSeparation()
-        );
         ApplyNeutralPosesToTransforms();
 
         Publish(
@@ -916,39 +986,18 @@ public sealed class CombatSpatialController : MonoBehaviour
         StopAllMovementInternal();
         hasPendingDodge = false;
         pendingDodge = default;
-        Vector3 firstPosition = firstNeutralPose.position;
-        Vector3 secondPosition = secondNeutralPose.position;
-        Vector3 direction =
-            Horizontal(secondPosition - firstPosition);
-        if (direction.sqrMagnitude <= PositionEpsilon)
-            direction = GetFallbackDuelDirection();
-        direction.Normalize();
-
-        Vector3 midpoint =
-            (firstPosition + secondPosition) * 0.5f;
-        float targetDistance = settings.MidRangeDistance;
-        firstNeutralPose = new Pose(
-            new Vector3(
-                midpoint.x +
-                direction.x * targetDistance * 0.5f,
-                firstPosition.y,
-                midpoint.z +
-                direction.z * targetDistance * 0.5f
-            ),
-            firstNeutralPose.rotation
-        );
-        secondNeutralPose = new Pose(
-            new Vector3(
-                midpoint.x -
-                direction.x * targetDistance * 0.5f,
-                secondPosition.y,
-                midpoint.z -
-                direction.z * targetDistance * 0.5f
-            ),
-            secondNeutralPose.rotation
+        DistanceLevel nextDistance = distanceLevel switch
+        {
+            DistanceLevel.CloseRange => DistanceLevel.MidRange,
+            DistanceLevel.MidRange => DistanceLevel.LongRange,
+            _ => DistanceLevel.CloseRange
+        };
+        MoveFighterToDistanceAnchor(
+            instigator,
+            nextDistance
         );
         relativeOrientation = RelativeOrientation.Face;
-        distanceLevel = DistanceLevel.MidRange;
+        distanceLevel = nextDistance;
         advantageFighter = null;
         flankDodgeDirection = null;
         flankElapsed = 0f;
@@ -1217,83 +1266,68 @@ public sealed class CombatSpatialController : MonoBehaviour
 
         Vector3 firstPosition = firstNeutralPose.position;
         Vector3 secondPosition = secondNeutralPose.position;
-        Vector3 firstToSecond =
-            Horizontal(secondPosition - firstPosition);
-        Vector3 duelDirection = firstToSecond.sqrMagnitude >
-            PositionEpsilon
-                ? firstToSecond.normalized
-                : GetFallbackDuelDirection();
         bool moved = false;
 
-        Vector3 firstVelocity = GetRadialVelocity(
-            firstMovement,
-            duelDirection,
-            true
-        );
-        Vector3 secondVelocity = GetRadialVelocity(
-            secondMovement,
-            duelDirection,
-            false
-        );
-        if (firstVelocity.sqrMagnitude > 0f ||
-            secondVelocity.sqrMagnitude > 0f)
-        {
-            Vector3 firstDelta =
-                firstVelocity * deltaTime;
-            Vector3 secondDelta =
-                secondVelocity * deltaTime;
-            float currentDistance =
-                firstToSecond.magnitude;
-            float requestedDistanceDelta =
-                Vector3.Dot(
-                    secondDelta - firstDelta,
-                    duelDirection
-                );
-            float constrainedDistance = Mathf.Clamp(
-                currentDistance + requestedDistanceDelta,
-                settings.MinimumDistance,
-                settings.MaximumDistance
-            );
-            float allowedDistanceDelta =
-                constrainedDistance - currentDistance;
-            float movementScale = Mathf.Abs(
-                    requestedDistanceDelta
-                ) > Mathf.Epsilon
-                    ? Mathf.Clamp01(
-                        allowedDistanceDelta /
-                        requestedDistanceDelta
-                    )
-                    : 1f;
-
-            firstPosition += firstDelta * movementScale;
-            secondPosition += secondDelta * movementScale;
-            moved =
-                firstDelta.sqrMagnitude > PositionEpsilon ||
-                secondDelta.sqrMagnitude > PositionEpsilon;
-            moved &= movementScale > 0f;
-        }
-
-        float strafeInput = GetCombinedStrafeInput();
+        float firstStrafeInput =
+            GetStrafeInput(firstMovement);
+        float secondStrafeInput =
+            GetStrafeInput(secondMovement);
         if (relativeOrientation == RelativeOrientation.Face &&
-            !Mathf.Approximately(strafeInput, 0f))
+            (!Mathf.Approximately(firstStrafeInput, 0f) ||
+             !Mathf.Approximately(secondStrafeInput, 0f)))
         {
-            float orbitRadius = Mathf.Max(
-                0.01f,
-                Horizontal(secondPosition - firstPosition)
-                    .magnitude * 0.5f
-            );
-            float degreesPerSecond =
-                settings.StrafeSpeed /
-                orbitRadius *
-                Mathf.Rad2Deg;
-            RotatePairAroundMidpoint(
-                ref firstPosition,
-                ref secondPosition,
-                strafeInput *
-                degreesPerSecond *
-                deltaTime
-            );
-            moved = true;
+            if (!Mathf.Approximately(firstStrafeInput, 0f) &&
+                Mathf.Approximately(secondStrafeInput, 0f))
+            {
+                RotateFighterAroundOpponent(
+                    ref firstPosition,
+                    secondPosition,
+                    firstStrafeInput,
+                    deltaTime
+                );
+                moved = true;
+            }
+            else if (
+                Mathf.Approximately(firstStrafeInput, 0f) &&
+                !Mathf.Approximately(secondStrafeInput, 0f))
+            {
+                RotateFighterAroundOpponent(
+                    ref secondPosition,
+                    firstPosition,
+                    secondStrafeInput,
+                    deltaTime
+                );
+                moved = true;
+            }
+            else
+            {
+                float combinedInput = Mathf.Clamp(
+                    firstStrafeInput + secondStrafeInput,
+                    -1f,
+                    1f
+                );
+                if (!Mathf.Approximately(combinedInput, 0f))
+                {
+                    float orbitRadius = Mathf.Max(
+                        0.01f,
+                        Horizontal(
+                            secondPosition - firstPosition
+                        ).magnitude * 0.5f
+                    );
+                    float degreesPerSecond =
+                        settings.StrafeSpeed /
+                        orbitRadius *
+                        Mathf.Rad2Deg;
+                    RotatePairAroundMidpoint(
+                        ref firstPosition,
+                        ref secondPosition,
+                        combinedInput *
+                        degreesPerSecond *
+                        deltaTime
+                    );
+                    moved = true;
+                }
+            }
         }
 
         if (!moved)
@@ -1308,9 +1342,6 @@ public sealed class CombatSpatialController : MonoBehaviour
             secondNeutralPose.rotation
         );
         RefreshNormalRotations();
-        distanceLevel = ResolveDistanceLevel(
-            GetHorizontalSeparation()
-        );
         ApplyNeutralPosesToTransforms();
 
         Publish(
@@ -1415,6 +1446,21 @@ public sealed class CombatSpatialController : MonoBehaviour
         out Pose firstEndPose,
         out Pose secondEndPose)
     {
+        if (direction is DodgeDirection.Forward or
+            DodgeDirection.Backward)
+        {
+            CalculateDistanceDodgeEndPoses(
+                fighter,
+                ResolveDodgeDistance(
+                    distanceLevel,
+                    direction
+                ),
+                out firstEndPose,
+                out secondEndPose
+            );
+            return;
+        }
+
         bool firstIsDodging = fighter == firstFighter;
         Pose fighterPose =
             firstIsDodging
@@ -1492,15 +1538,129 @@ public sealed class CombatSpatialController : MonoBehaviour
         }
     }
 
+    private void CalculateDistanceDodgeEndPoses(
+        FighterCombat fighter,
+        DistanceLevel targetDistance,
+        out Pose firstEndPose,
+        out Pose secondEndPose)
+    {
+        bool firstIsDodging = fighter == firstFighter;
+        Pose fighterPose =
+            firstIsDodging ? firstNeutralPose : secondNeutralPose;
+        Pose otherPose =
+            firstIsDodging ? secondNeutralPose : firstNeutralPose;
+        Vector3 radial =
+            Horizontal(fighterPose.position - otherPose.position);
+        if (radial.sqrMagnitude <= PositionEpsilon)
+            radial = -Horizontal(otherPose.rotation * Vector3.forward);
+        if (radial.sqrMagnitude <= PositionEpsilon)
+            radial = Vector3.back;
+
+        Vector3 fighterPosition =
+            otherPose.position +
+            radial.normalized * settings.GetDistance(targetDistance);
+        fighterPosition.y = fighterPose.position.y;
+        Pose fighterEndPose = new(
+            fighterPosition,
+            fighterPose.rotation
+        );
+        Pose otherEndPose = otherPose;
+
+        if (relativeOrientation == RelativeOrientation.Face)
+        {
+            fighterEndPose = new Pose(
+                fighterPosition,
+                FacingRotation(
+                    fighterPosition,
+                    otherPose.position,
+                    fighterPose.rotation
+                )
+            );
+            otherEndPose = new Pose(
+                otherPose.position,
+                FacingRotation(
+                    otherPose.position,
+                    fighterPosition,
+                    otherPose.rotation
+                )
+            );
+        }
+
+        if (firstIsDodging)
+        {
+            firstEndPose = fighterEndPose;
+            secondEndPose = otherEndPose;
+        }
+        else
+        {
+            firstEndPose = otherEndPose;
+            secondEndPose = fighterEndPose;
+        }
+    }
+
+    private void MoveFighterToDistanceAnchor(
+        FighterCombat fighter,
+        DistanceLevel targetDistance)
+    {
+        CalculateDistanceDodgeEndPoses(
+            fighter,
+            targetDistance,
+            out Pose firstEndPose,
+            out Pose secondEndPose
+        );
+        firstNeutralPose = firstEndPose;
+        secondNeutralPose = secondEndPose;
+    }
+
+    private static DistanceLevel ResolveDodgeDistance(
+        DistanceLevel current,
+        DodgeDirection direction)
+    {
+        if (direction == DodgeDirection.Forward)
+        {
+            return current switch
+            {
+                DistanceLevel.LongRange => DistanceLevel.MidRange,
+                DistanceLevel.MidRange => DistanceLevel.CloseRange,
+                _ => DistanceLevel.CloseRange
+            };
+        }
+
+        if (direction == DodgeDirection.Backward)
+        {
+            return current switch
+            {
+                DistanceLevel.CloseRange => DistanceLevel.MidRange,
+                DistanceLevel.MidRange => DistanceLevel.LongRange,
+                _ => DistanceLevel.LongRange
+            };
+        }
+
+        return current;
+    }
+
     private void ConstrainNeutralDistance()
     {
         Vector3 firstPosition = firstNeutralPose.position;
         Vector3 secondPosition = secondNeutralPose.position;
-        ConstrainPairPositions(
-            ref firstPosition,
-            ref secondPosition,
-            GetFallbackDuelDirection()
-        );
+        Vector3 separation =
+            Horizontal(secondPosition - firstPosition);
+        Vector3 direction =
+            separation.sqrMagnitude > PositionEpsilon
+                ? separation.normalized
+                : GetFallbackDuelDirection();
+        if (direction.sqrMagnitude <= PositionEpsilon)
+            direction = Vector3.forward;
+        Vector3 midpoint =
+            (firstPosition + secondPosition) * 0.5f;
+        float halfDistance =
+            settings.GetDistance(distanceLevel) * 0.5f;
+        float firstY = firstPosition.y;
+        float secondY = secondPosition.y;
+        firstPosition = midpoint - direction * halfDistance;
+        secondPosition = midpoint + direction * halfDistance;
+        firstPosition.y = firstY;
+        secondPosition.y = secondY;
         firstNeutralPose = new Pose(
             firstPosition,
             firstNeutralPose.rotation
@@ -1626,12 +1786,27 @@ public sealed class CombatSpatialController : MonoBehaviour
         };
     }
 
-    private float GetCombinedStrafeInput()
+    private void RotateFighterAroundOpponent(
+        ref Vector3 fighterPosition,
+        Vector3 opponentPosition,
+        float strafeInput,
+        float deltaTime)
     {
-        float combined =
-            GetStrafeInput(firstMovement) +
-            GetStrafeInput(secondMovement);
-        return Mathf.Clamp(combined, -1f, 1f);
+        Vector3 relative =
+            Horizontal(fighterPosition - opponentPosition);
+        float radius = Mathf.Max(0.01f, relative.magnitude);
+        float angle =
+            strafeInput *
+            settings.StrafeSpeed /
+            radius *
+            Mathf.Rad2Deg *
+            deltaTime;
+        float fighterY = fighterPosition.y;
+        fighterPosition =
+            opponentPosition +
+            Quaternion.AngleAxis(angle, Vector3.up) *
+            relative;
+        fighterPosition.y = fighterY;
     }
 
     private static float GetStrafeInput(
@@ -1961,6 +2136,6 @@ public sealed class CombatSpatialController : MonoBehaviour
         DodgeDirection direction)
     {
         return direction >= DodgeDirection.Left &&
-               direction <= DodgeDirection.Right;
+               direction <= DodgeDirection.Backward;
     }
 }

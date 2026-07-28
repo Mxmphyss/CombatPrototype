@@ -325,3 +325,132 @@ relative orientations, one active Gesture Pad pointer and a simple
 probabilistic AI. It does not yet provide collision-aware navigation,
 crowd combat, rollback networking, deterministic replay or a complete
 RPG modifier pipeline.
+
+## v0.6.1 correction overlay
+
+Version 0.6.1 replaces the continuous radial movement described above.
+The three configured distances are now strict anchors:
+
+```text
+Close = 3
+Mid   = 6
+Long  = 9
+```
+
+`CombatSpatialController` remains the only authority for those anchors.
+The current logical distance is not inferred again from a transient
+transform. A completed action always commits exactly one configured
+anchor, and a cancelled action restores the previously committed pose.
+
+### Transactional radial dodges
+
+H-E and H-J no longer start held movement:
+
+- H-E requests a `Forward` dodge and moves Long to Mid or Mid to Close;
+- H-J requests a `Backward` dodge and moves Close to Mid or Mid to Long;
+- a request at the relevant limit is refused without movement.
+
+Forward, backward, left and right share the same dodge transaction,
+stamina cost, protected interval, recovery, cancellation and epoch.
+Only their committed result differs: radial dodges change distance,
+while lateral dodges change relative orientation. The radial target pose
+is calculated before animation from the stationary opponent and the
+target anchor. No second post-animation correction is scheduled.
+
+Attack lunges and feedback recoil remain visual offsets. Their return
+target is queried from the current spatial authority, so a camera move,
+permutation or committed dodge cannot make them return to a scene-start
+position.
+
+### Strafe rotation rules
+
+Held H-G and H-I remain continuous strafes. They preserve the current
+distance. From `Face`, the active fighter orbits the stationary opponent
+and both fighters are reoriented toward each other after every spatial
+update. Simultaneous compatible strafe requests retain pair arbitration.
+This mutual tracking is not applied in `LeftFlank`, `RightFlank` or
+`Back`; those states retain their positional advantage and existing
+flank timer rules.
+
+### Cyclic permutation
+
+Permutation now advances the acting fighter through:
+
+```text
+Close -> Mid -> Long -> Close
+```
+
+The transition spends the configured cost once, moves directly to the
+next exact anchor, restores `Face`, clears flank ownership and timers,
+and invalidates incompatible pending work through the existing spatial
+revision. Exactly 50 stamina remains a valid payment and may leave zero
+without creating a new stun rule.
+
+### Camera authority
+
+`CombatCameraController` is the only runtime authority that writes the
+combat camera pose and zoom. It keeps the camera rotation captured at
+initialization, follows the real player transform, biases the framing
+slightly toward the opponent and increases the zoom only when needed to
+keep the pair visible. If maximum zoom is insufficient during a long
+orbit, the framing bias moves progressively toward the opponent up to a
+configurable ceiling; the camera rotation remains unchanged.
+
+Manual prototype input is stored separately:
+
+```text
+camera pose = automatic follow + manual pan + transient shake
+camera zoom = automatic framing + manual pinch offset
+```
+
+Two active Enhanced Touch contacts reserve input for the camera. Their
+average same-direction delta pans the view; their distance delta changes
+zoom within the configured minimum and maximum. The Gesture Pad cancels
+its active pointer cycle when this state begins and resumes normally
+after it ends. Focus loss, application pause, disable, camera reset and
+combat replay clear the transient multi-touch state.
+
+The prototype camera reset button clears manual pan, manual zoom and
+shake, then immediately reapplies automatic framing. It never moves a
+fighter.
+
+### Distance and facing diagnostics
+
+`CombatDistanceDebugVisualizer` creates three cached, collider-free
+`LineRenderer` circles under the opponent. Their radii come directly
+from `CombatSpatialController.GetDistance`; the current level receives
+a wider line. Two short local facing markers make capsule orientation
+visible. A prototype toggle changes visibility without recreating the
+renderers or affecting raycasts.
+
+### Reset contract
+
+Replay clears the camera offsets and multi-touch state, pending radial
+or lateral dodge, strafe, permutation side effects, flank timer,
+temporary combat offsets and Gesture Pad state. The spatial reset
+returns to exact Mid/Face poses. The distance renderer is refreshed
+against that snapshot. All reset entry points remain safe to call more
+than once.
+
+### v0.6.1 validation
+
+`Assets/Editor/V061CorrectionValidation.cs` verifies deterministic
+camera reset and zoom limits, exact 3/6/9 anchors, forward/backward
+limits, transactional rollback, lateral orientation, cyclic
+permutation, exact stamina cost, gesture normalization and the
+collider-free distance visualizer. `V06SpatialValidation.Run` delegates
+to this current invariant set because its former continuous radial
+movement expectations are obsolete.
+
+`Assets/Editor/V061PlayModeValidation.cs` opens `CombatArena` in real
+Play Mode, pauses the enemy AI, then checks runtime initialization,
+forward-dodge commit, stationary-opponent strafe, stable camera
+rotation/framing, Close-to-Mid permutation, exact stamina payment and
+the absence of debug colliders.
+
+These automated validations do not emulate real Android multi-touch or
+assess visual smoothness. Device acceptance must still cover
+two-finger pan and pinch, Gesture Pad exclusion, long strafe framing,
+Long-range opponent visibility, micro-correction visibility, distance
+circle readability, mutual capsule rotation and tolerant finger-drawn
+permutation.

@@ -31,6 +31,7 @@ public enum GestureShape
     Point,
     HorizontalLine,
     VShape,
+    RoofShape,
     Freeform
 }
 
@@ -86,6 +87,12 @@ public sealed class HybridGestureRecognizerSettings
     [Range(0.05f, 0.35f)]
     public float bottomBandFalloff = 0.16f;
 
+    [Range(0.05f, 0.3f)]
+    public float horizontalVerticalTolerance = 0.14f;
+
+    [Range(0.05f, 0.35f)]
+    public float horizontalVerticalFalloff = 0.18f;
+
     [Header("Grand V")]
     [Range(0.4f, 0.9f)]
     public float vTopMinimum = 0.62f;
@@ -98,6 +105,45 @@ public sealed class HybridGestureRecognizerSettings
 
     [Range(0f, 0.4f)]
     public float vHorizontalTolerance = 0.24f;
+
+    [Header("Toit de permutation")]
+    [Range(0.15f, 0.55f)]
+    public float roofStartMaximumY = 0.38f;
+
+    [Range(0.15f, 0.55f)]
+    public float roofEndMaximumY = 0.38f;
+
+    [Range(0.25f, 0.75f)]
+    public float roofPeakMinimumY = 0.48f;
+
+    [Range(0.08f, 0.5f)]
+    public float roofMinimumRise = 0.18f;
+
+    [Range(0.05f, 0.4f)]
+    public float roofCenterTolerance = 0.22f;
+
+    [Range(0.4f, 0.9f)]
+    public float roofMaximumAverageY = 0.62f;
+}
+
+public sealed class GestureShapeDefinition
+{
+    public CombatGestureId GestureId { get; }
+    public GestureShape Shape { get; }
+    public IReadOnlyList<int> CanonicalZones { get; }
+    public string DisplayName { get; }
+
+    public GestureShapeDefinition(
+        CombatGestureId gestureId,
+        GestureShape shape,
+        IReadOnlyList<int> canonicalZones,
+        string displayName)
+    {
+        GestureId = gestureId;
+        Shape = shape;
+        CanonicalZones = canonicalZones;
+        DisplayName = displayName;
+    }
 }
 
 public readonly struct TimedGestureSample
@@ -122,6 +168,7 @@ public readonly struct GestureRecognitionResult
     public GestureDirection Direction { get; }
     public GestureShape Shape { get; }
     public IReadOnlyList<int> Zones { get; }
+    public IReadOnlyList<int> RawZones { get; }
     public float Duration { get; }
     public float PathLength { get; }
     public float AverageSpeed { get; }
@@ -139,7 +186,8 @@ public readonly struct GestureRecognitionResult
         IReadOnlyList<int> zones,
         float duration,
         float pathLength,
-        float confidence)
+        float confidence,
+        IReadOnlyList<int> rawZones = null)
     {
         Status = status;
         GestureId = gestureId;
@@ -147,6 +195,7 @@ public readonly struct GestureRecognitionResult
         Direction = direction;
         Shape = shape;
         Zones = zones ?? EmptyZones;
+        RawZones = rawZones ?? Zones;
         Duration = Mathf.Max(0f, duration);
         PathLength = Mathf.Max(0f, pathLength);
         AverageSpeed = Duration > Mathf.Epsilon
@@ -185,7 +234,8 @@ public readonly struct GestureRecognitionResult
             Zones,
             Duration,
             PathLength,
-            Confidence
+            Confidence,
+            RawZones
         );
     }
 }
@@ -195,6 +245,22 @@ public sealed class HybridGestureRecognizer
     private static readonly int[] DodgeRightZones = { 6, 7, 8 };
     private static readonly int[] DodgeLeftZones = { 8, 7, 6 };
     private static readonly int[] GrandVZones = { 0, 7, 2 };
+    private static readonly int[] PermutationZones = { 6, 4, 8 };
+    public static readonly GestureShapeDefinition GrandVDefinition =
+        new(
+            CombatGestureId.GrandV,
+            GestureShape.VShape,
+            GrandVZones,
+            "Grand V"
+        );
+    public static readonly GestureShapeDefinition
+        PermutationDefinition =
+        new(
+            CombatGestureId.Permutation,
+            GestureShape.RoofShape,
+            PermutationZones,
+            "Permutation"
+        );
 
     private readonly HybridGestureRecognizerSettings settings;
     private readonly float middleOuterOffset;
@@ -265,6 +331,7 @@ public sealed class HybridGestureRecognizer
 
         AddHorizontalCandidates();
         AddGrandVCandidate();
+        AddPermutationRoofCandidate();
         candidates.Sort(
             static (left, right) =>
                 right.Score.CompareTo(left.Score)
@@ -308,7 +375,8 @@ public sealed class HybridGestureRecognizer
             best.Zones,
             duration,
             pathLength,
-            best.Score
+            best.Score,
+            projectedZones.ToArray()
         );
     }
 
@@ -400,12 +468,19 @@ public sealed class HybridGestureRecognizer
         );
         float bandScore = CalculateBottomBandScore();
         float straightnessScore = CalculateStraightness();
+        float verticalRange = CalculateVerticalRange();
+        float verticalStability = 1f - Mathf.InverseLerp(
+            settings.horizontalVerticalTolerance,
+            settings.horizontalVerticalTolerance +
+            settings.horizontalVerticalFalloff,
+            verticalRange
+        );
         float score = (
             directionScore * 0.38f +
             spanScore * 0.28f +
             bandScore * 0.2f +
             straightnessScore * 0.14f
-        ) * bandScore;
+        ) * bandScore * verticalStability;
 
         if (displacement.x > 0f)
         {
@@ -517,6 +592,122 @@ public sealed class HybridGestureRecognizer
         );
     }
 
+    private void AddPermutationRoofCandidate()
+    {
+        Vector2 start = resampledPoints[0];
+        Vector2 end = resampledPoints[^1];
+        int peakIndex = 0;
+        float peakY = float.NegativeInfinity;
+        float averageY = 0f;
+
+        for (int index = 0;
+             index < resampledPoints.Count;
+             index++)
+        {
+            Vector2 point = resampledPoints[index];
+            averageY += point.y;
+            peakY = Mathf.Max(peakY, point.y);
+        }
+
+        averageY /= resampledPoints.Count;
+        float peakXTotal = 0f;
+        float peakIndexTotal = 0f;
+        int peakSampleCount = 0;
+        for (int index = 0;
+             index < resampledPoints.Count;
+             index++)
+        {
+            if (resampledPoints[index].y < peakY - 0.04f)
+                continue;
+
+            peakXTotal += resampledPoints[index].x;
+            peakIndexTotal += index;
+            peakSampleCount++;
+        }
+        Vector2 peak = new(
+            peakSampleCount > 0
+                ? peakXTotal / peakSampleCount
+                : resampledPoints[peakIndex].x,
+            peakY
+        );
+        float peakProgress =
+            peakSampleCount > 0
+                ? peakIndexTotal /
+                  peakSampleCount /
+                  (resampledPoints.Count - 1)
+                : peakIndex /
+                  (float)(resampledPoints.Count - 1);
+        float startBottom = 1f - Mathf.InverseLerp(
+            settings.roofStartMaximumY,
+            1f,
+            start.y
+        );
+        float endBottom = 1f - Mathf.InverseLerp(
+            settings.roofEndMaximumY,
+            1f,
+            end.y
+        );
+        float rise = peak.y - Mathf.Max(start.y, end.y);
+        float riseScore = Mathf.Clamp01(
+            rise / Mathf.Max(0.01f, settings.roofMinimumRise)
+        );
+        float peakHeight = Mathf.Max(
+            Mathf.InverseLerp(
+                settings.roofPeakMinimumY,
+                1f,
+                peak.y
+            ),
+            riseScore
+        );
+        float startLeft = 1f - Mathf.InverseLerp(
+            0.35f,
+            0.55f,
+            start.x
+        );
+        float endRight = Mathf.InverseLerp(
+            0.45f,
+            0.65f,
+            end.x
+        );
+        float peakCenter = 1f - Mathf.Clamp01(
+            Mathf.Abs(peak.x - 0.5f) /
+            Mathf.Max(0.01f, settings.roofCenterTolerance)
+        );
+        float timing = 1f - Mathf.Clamp01(
+            Mathf.Abs(peakProgress - 0.5f) / 0.38f
+        );
+        float regionScore = 1f - Mathf.InverseLerp(
+            settings.roofMaximumAverageY,
+            1f,
+            averageY
+        );
+        float directionScore =
+            start.x < peak.x && peak.x < end.x
+                ? 1f
+                : 0f;
+        float score = (
+            startBottom * 0.11f +
+            endBottom * 0.11f +
+            peakHeight * 0.12f +
+            riseScore * 0.18f +
+            startLeft * 0.1f +
+            endRight * 0.1f +
+            peakCenter * 0.11f +
+            timing * 0.07f +
+            directionScore * 0.1f
+        ) * regionScore;
+
+        candidates.Add(
+            new RecognitionCandidate(
+                CombatGestureId.Permutation,
+                GestureDirection.Right,
+                GestureShape.RoofShape,
+                PermutationZones,
+                score
+            )
+        );
+    }
+
     private float CalculateBottomBandScore()
     {
         float excessTotal = 0f;
@@ -552,6 +743,23 @@ public sealed class HybridGestureRecognizer
             resampledPoints[^1]
         );
         return Mathf.Clamp01(displacement / pathLength);
+    }
+
+    private float CalculateVerticalRange()
+    {
+        float minimum = float.PositiveInfinity;
+        float maximum = float.NegativeInfinity;
+
+        for (int index = 0;
+             index < resampledPoints.Count;
+             index++)
+        {
+            float value = resampledPoints[index].y;
+            minimum = Mathf.Min(minimum, value);
+            maximum = Mathf.Max(maximum, value);
+        }
+
+        return maximum - minimum;
     }
 
     private static void ProjectZones(

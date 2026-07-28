@@ -409,6 +409,16 @@ public class FighterCombat : MonoBehaviour
         return StartDodge(DodgeDirection.Right);
     }
 
+    public CombatActionResult DodgeForward()
+    {
+        return StartDodge(DodgeDirection.Forward);
+    }
+
+    public CombatActionResult DodgeBackward()
+    {
+        return StartDodge(DodgeDirection.Backward);
+    }
+
     public CombatActionResult StartSpatialMovement(
         SpatialMovementType movement)
     {
@@ -1049,9 +1059,14 @@ public class FighterCombat : MonoBehaviour
                 out preparedDodge
             ))
         {
+            CombatRefusalReason reason =
+                direction is DodgeDirection.Forward or
+                    DodgeDirection.Backward
+                    ? CombatRefusalReason.DistanceLimit
+                    : CombatRefusalReason.IncompatibleOrientation;
             return Refuse(
                 CombatActionResult.Unavailable,
-                CombatRefusalReason.IncompatibleOrientation
+                reason
             );
         }
 

@@ -115,6 +115,7 @@ public sealed class CombatGestureGrid :
 
     private CombatHUD hud;
     private CombatGestureCommandRouter commandRouter;
+    private CombatCameraController cameraController;
     private HybridGestureRecognizer gestureRecognizer;
     private GestureRibbonGraphic ribbon;
     private Image contextPoint;
@@ -137,6 +138,7 @@ public sealed class CombatGestureGrid :
     private bool permutationCenterReached;
     private bool permutationPathInvalid;
     private bool permutationLatched;
+    private bool distanceDodgeLatched;
     private bool strokeFollowedByHold;
     private bool hasPointerLocalPosition;
     private long nextCommandToken;
@@ -193,6 +195,23 @@ public sealed class CombatGestureGrid :
         CancelRecognitionFeedback();
     }
 
+    public void SetCameraController(
+        CombatCameraController controller)
+    {
+        if (cameraController != null)
+        {
+            cameraController.OnMultiTouchStateChanged -=
+                HandleMultiTouchStateChanged;
+        }
+
+        cameraController = controller;
+        if (cameraController != null)
+        {
+            cameraController.OnMultiTouchStateChanged +=
+                HandleMultiTouchStateChanged;
+        }
+    }
+
     private void Initialize(
         FighterCombat player,
         CombatHUD combatHud)
@@ -220,6 +239,13 @@ public sealed class CombatGestureGrid :
 
     private void Update()
     {
+        if (cameraController != null &&
+            cameraController.IsMultiTouchActive)
+        {
+            CancelPointerAction();
+            return;
+        }
+
         if (activePointerId != int.MinValue &&
             commandRouter != null &&
             commandRouter.ShouldCancelInput)
@@ -324,6 +350,11 @@ public sealed class CombatGestureGrid :
         CancelRecognitionFeedback();
     }
 
+    private void OnDestroy()
+    {
+        SetCameraController(null);
+    }
+
     private void OnApplicationFocus(bool hasFocus)
     {
         if (!hasFocus)
@@ -341,7 +372,9 @@ public sealed class CombatGestureGrid :
         if (!inputEnabled ||
             activePointerId != int.MinValue ||
             commandRouter == null ||
-            commandRouter.IsDead)
+            commandRouter.IsDead ||
+            (cameraController != null &&
+             cameraController.IsMultiTouchActive))
         {
             return;
         }
@@ -363,6 +396,7 @@ public sealed class CombatGestureGrid :
         permutationCenterReached = false;
         permutationPathInvalid = false;
         permutationLatched = false;
+        distanceDodgeLatched = false;
         strokeFollowedByHold = false;
         activeHoldZone = -1;
         if (nextCommandToken < long.MaxValue)
@@ -459,7 +493,7 @@ public sealed class CombatGestureGrid :
             return;
         }
 
-        if (permutationLatched)
+        if (permutationLatched || distanceDodgeLatched)
         {
             ResetPointerState();
             return;
@@ -520,6 +554,7 @@ public sealed class CombatGestureGrid :
             return;
         }
 
+        long commandToken = activeCommandToken;
         GestureRecognitionResult result =
             gestureRecognizer.Recognize(normalizedSamples);
 
@@ -531,7 +566,7 @@ public sealed class CombatGestureGrid :
         }
 
         ResetPointerState();
-        PresentRecognition(result);
+        PresentRecognition(result, commandToken);
     }
 
     public void OnCancel(BaseEventData eventData)
@@ -555,7 +590,10 @@ public sealed class CombatGestureGrid :
 
         if (!holdStarted)
         {
-            UpdatePermutationState(currentLogicalZone);
+            TryExecuteDistanceDodge(
+                previousLogicalZone,
+                currentLogicalZone
+            );
             UpdateStrokeHoldTracking(
                 previousLogicalZone,
                 currentLogicalZone
@@ -661,6 +699,35 @@ public sealed class CombatGestureGrid :
         }
     }
 
+    private void TryExecuteDistanceDodge(
+        int previousZone,
+        int currentZone)
+    {
+        if (distanceDodgeLatched ||
+            startingZone != MiddleMovementZone ||
+            previousZone != MiddleMovementZone ||
+            currentZone is not MiddleDefenseZone and
+                not ContextMovementZone)
+        {
+            return;
+        }
+
+        distanceDodgeLatched = true;
+        RoutedGestureAction action =
+            commandRouter.ExecuteDistanceDodge(currentZone);
+        PublishStrokeHoldCompleted(
+            currentZone,
+            action,
+            GestureInputKind.Stroke,
+            new[] { MiddleMovementZone, currentZone }
+        );
+        PresentAction(action);
+        StartRecognitionFeedback(
+            new[] { MiddleMovementZone, currentZone },
+            ZoneColor(currentZone)
+        );
+    }
+
     private void UpdatePermutationState(int currentZone)
     {
         if (startingZone != LeftMovementZone ||
@@ -727,8 +794,6 @@ public sealed class CombatGestureGrid :
     private static bool IsStrokeHoldDestination(int zone)
     {
         return zone is
-            MiddleDefenseZone or
-            ContextMovementZone or
             LeftMovementZone or
             RightMovementZone;
     }
@@ -1025,7 +1090,8 @@ public sealed class CombatGestureGrid :
     }
 
     private void PresentRecognition(
-        GestureRecognitionResult recognitionResult)
+        GestureRecognitionResult recognitionResult,
+        long commandToken)
     {
         Color color = recognitionResult.Zones.Count > 0
             ? ZoneColor(recognitionResult.Zones[0])
@@ -1036,7 +1102,8 @@ public sealed class CombatGestureGrid :
             case GestureRecognitionStatus.Recognized:
                 RoutedGestureAction action =
                     commandRouter.ExecuteStroke(
-                        recognitionResult
+                        recognitionResult,
+                        commandToken
                     );
                 PublishRecognitionCompleted(
                     recognitionResult,
@@ -1094,7 +1161,8 @@ public sealed class CombatGestureGrid :
             action.CombatResult,
             action.Label,
             color,
-            successDuration
+            successDuration,
+            action.RefusalReason
         );
     }
 
@@ -1169,6 +1237,12 @@ public sealed class CombatGestureGrid :
         ResetPointerState();
     }
 
+    private void HandleMultiTouchStateChanged(bool active)
+    {
+        if (active)
+            CancelPointerAction();
+    }
+
     private void ResetPointerState()
     {
         activePointerId = int.MinValue;
@@ -1188,6 +1262,7 @@ public sealed class CombatGestureGrid :
         permutationCenterReached = false;
         permutationPathInvalid = false;
         permutationLatched = false;
+        distanceDodgeLatched = false;
         strokeFollowedByHold = false;
         hasPointerLocalPosition = false;
         activeCommandToken = 0;
@@ -1319,7 +1394,9 @@ public sealed class CombatGestureGrid :
         CombatActionResult result,
         string successMessage,
         Color successColor,
-        float successDuration = 1f)
+        float successDuration = 1f,
+        CombatRefusalReason refusalReason =
+            CombatRefusalReason.None)
     {
         switch (result)
         {
@@ -1349,7 +1426,13 @@ public sealed class CombatGestureGrid :
 
             default:
                 ShowFeedback(
-                    "Combat termine",
+                    refusalReason ==
+                        CombatRefusalReason.DistanceLimit
+                        ? "Limite de distance atteinte"
+                        : refusalReason ==
+                            CombatRefusalReason.Stunned
+                            ? "Impossible pendant l'etourdissement"
+                            : "Action indisponible",
                     Color.white,
                     1f
                 );
@@ -1519,7 +1602,9 @@ public sealed class CombatGestureGrid :
                 action.HasCombatResult,
                 action.CombatResult,
                 action.Label,
-                action.RefusalReason
+                action.RefusalReason,
+                recognitionResult.RawZones,
+                recognitionResult.Zones
             )
         );
     }
@@ -1540,7 +1625,10 @@ public sealed class CombatGestureGrid :
                 recognitionResult.Status ==
                     GestureRecognitionStatus.Ambiguous
                         ? "Geste ambigu"
-                        : "Geste invalide"
+                        : "Geste invalide",
+                CombatRefusalReason.None,
+                recognitionResult.RawZones,
+                recognitionResult.Zones
             )
         );
     }

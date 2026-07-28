@@ -391,6 +391,8 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         if (!CanAct() ||
             spatialController == null ||
             transaction.Fighter != player ||
+            transaction.Direction is not DodgeDirection.Left and
+                not DodgeDirection.Right ||
             !enemy.Rules.AiCompensationEnabled)
         {
             return;

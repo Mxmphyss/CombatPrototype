@@ -153,10 +153,6 @@ public sealed class CombatGestureCommandRouter
         SpatialMovementType movementType =
             destinationZone switch
             {
-                MiddleDefenseZone =>
-                    SpatialMovementType.Advance,
-                ContextMovementZone =>
-                    SpatialMovementType.Retreat,
                 6 => SpatialMovementType.StrafeLeft,
                 8 => SpatialMovementType.StrafeRight,
                 _ => SpatialMovementType.None
@@ -182,6 +178,36 @@ public sealed class CombatGestureCommandRouter
         fighter?.StopSpatialMovement();
     }
 
+    public RoutedGestureAction ExecuteDistanceDodge(
+        int destinationZone)
+    {
+        if (fighter == null)
+        {
+            return RoutedGestureAction.Unmapped(
+                "Commande indisponible",
+                destinationZone
+            );
+        }
+
+        return destinationZone switch
+        {
+            MiddleDefenseZone => Action(
+                fighter.DodgeForward(),
+                "Esquive avant",
+                destinationZone
+            ),
+            ContextMovementZone => Action(
+                fighter.DodgeBackward(),
+                "Esquive arriere",
+                destinationZone
+            ),
+            _ => RoutedGestureAction.Unmapped(
+                "Non assigne",
+                destinationZone
+            )
+        };
+    }
+
     public RoutedGestureAction TryPermutation(
         long commandToken)
     {
@@ -201,7 +227,8 @@ public sealed class CombatGestureCommandRouter
     }
 
     public RoutedGestureAction ExecuteStroke(
-        GestureRecognitionResult recognition)
+        GestureRecognitionResult recognition,
+        long commandToken = 0)
     {
         if (fighter == null || !recognition.IsRecognized)
         {
@@ -232,6 +259,9 @@ public sealed class CombatGestureCommandRouter
                     "Non assigné",
                     FirstZone(recognition)
                 );
+
+            case CombatGestureId.Permutation:
+                return TryPermutation(commandToken);
 
             default:
                 return RoutedGestureAction.Unmapped(

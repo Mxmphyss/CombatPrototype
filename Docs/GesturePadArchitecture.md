@@ -103,3 +103,61 @@ routed with a unique command token so repeated delivery cannot spend the
 cost or apply the atomic swap twice. Dodge strokes remain `G-H-I` and
 `I-H-G`. Every end/cancel/reset path clears contextual J, the live
 stroke-hold and the permutation latch idempotently.
+
+## v0.6.1 input and shape corrections
+
+The pad geometry, normalized coordinates, visual scale, touch areas and
+ribbon are unchanged.
+
+An H-origin stroke now has two immediate radial commands:
+
+- H-E: forward dodge;
+- H-J: backward dodge.
+
+They execute when the destination is entered; `PointerUp` only closes
+the pointer cycle and cannot dispatch the command a second time. H-G
+and H-I still require a hold before starting left/right strafe. A simple
+H hold remains stamina charge, and E hold remains held guard.
+
+The camera controller publishes a multi-touch reservation state. When
+two contacts are active, `CombatGestureGrid` cancels any active combat
+pointer, ignores new combat input and clears contextual J and latches.
+When the contacts are released, the next single-pointer cycle works
+normally.
+
+### Modular shape definitions
+
+`GestureShapeDefinition` describes the gesture identifier, geometric
+shape, canonical zones and readable name. The current definitions are:
+
+```text
+Grand V      A-H-C   VShape
+Permutation  G-E-I   RoofShape
+```
+
+The recognizer still uses the existing normalized sample stream and
+candidate scoring. The permutation profile evaluates bottom-region
+start/end placement, a central rise near E, direction, timing and
+average vertical region. A separate vertical-stability term prevents a
+bottom horizontal dodge from tying the roof candidate.
+
+This makes both the direct path `G-E-I` and the noisy path
+`G-D-E-F-I` resolve to the canonical `G-E-I`, while preserving:
+
+- `G-H-I` and `I-H-G` as horizontal dodges;
+- `A-H-C` as the unassigned Grand V;
+- refusal of the equivalent roof in the upper pad.
+
+Exact/legacy command routing remains available for existing taps,
+holds and dedicated dodge shapes.
+
+### Telemetry
+
+A recognition result keeps both:
+
+- `RawZones`: zones crossed by the sampled path;
+- `Zones`: canonical zones returned by the winning definition.
+
+The prototype debug display shows `Brut ... | Forme ...` only when they
+differ, followed by the routed command and its actual result. The
+existing history is retained.

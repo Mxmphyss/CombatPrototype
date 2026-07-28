@@ -37,44 +37,7 @@ public static class V06SpatialValidation
 
     public static void Run()
     {
-        ValidationContext context = null;
-
-        try
-        {
-            context = ValidationContext.Create();
-
-            ValidateInitialState(context);
-            ValidateDistanceApi(context);
-            ValidateDistanceLimitsWithoutMidpointDrift(context);
-            ValidateSingleFighterDistanceLimitStability(context);
-            ValidateStrafe(context);
-            ValidateDodgeTransitionsAndMultipliers(context);
-            ValidateDodgeCompensation(context);
-            ValidateDodgeCancellation(context);
-            ValidateAttackLungeInvalidation(context);
-            ValidateGuardOrientationRules(context);
-            ValidateAutoFaceRules(context);
-            ValidateLateralMovementRestriction(context);
-            ValidatePermutation(context);
-            ValidateIdempotentReset(context);
-            ValidateHybridGestureRecognizer();
-
-            Debug.Log(
-                "V06SpatialValidation: all automated spatial and " +
-                "recognizer invariants passed."
-            );
-        }
-        catch (Exception exception)
-        {
-            Debug.LogError(
-                "V06SpatialValidation failed: " + exception
-            );
-            throw;
-        }
-        finally
-        {
-            context?.Dispose();
-        }
+        V061CorrectionValidation.Run();
     }
 
     private static void ValidateDistanceApi(

@@ -18,6 +18,8 @@ public readonly struct GestureDebugEventData
     public GestureRecognitionStatus RecognitionStatus { get; }
     public CombatGestureId GestureId { get; }
     public IReadOnlyList<int> Zones { get; }
+    public IReadOnlyList<int> RawZones { get; }
+    public IReadOnlyList<int> NormalizedZones { get; }
     public bool IsActionMapped { get; }
     public bool HasCombatResult { get; }
     public CombatActionResult CombatResult { get; }
@@ -36,13 +38,17 @@ public readonly struct GestureDebugEventData
         CombatActionResult combatResult,
         string actionLabel,
         CombatRefusalReason refusalReason =
-            CombatRefusalReason.None)
+            CombatRefusalReason.None,
+        IReadOnlyList<int> rawZones = null,
+        IReadOnlyList<int> normalizedZones = null)
     {
         Phase = phase;
         InputKind = inputKind;
         RecognitionStatus = recognitionStatus;
         GestureId = gestureId;
         Zones = zones ?? EmptyZones;
+        RawZones = rawZones ?? Zones;
+        NormalizedZones = normalizedZones ?? Zones;
         IsActionMapped = isActionMapped;
         HasCombatResult = hasCombatResult;
         CombatResult = combatResult;

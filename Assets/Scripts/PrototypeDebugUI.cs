@@ -12,17 +12,24 @@ public sealed class PrototypeDebugUI : MonoBehaviour
 
     private EnemyAutoCombat enemyAI;
     private CombatSpatialController spatialController;
+    private CombatCameraController cameraController;
+    private CombatDistanceDebugVisualizer distanceVisualizer;
     private GestureDebugDisplay gestureDisplay;
     private Button aiToggleButton;
     private Image aiToggleImage;
     private Text aiToggleLabel;
     private Text spatialStateLabel;
+    private Text cameraResetLabel;
+    private Text distanceToggleLabel;
+    private Text cameraStateLabel;
 
     public static PrototypeDebugUI Create(
         Transform parent,
         EnemyAutoCombat enemyAutoCombat,
         CombatGestureGrid gestureGrid,
-        CombatSpatialController spatialAuthority = null)
+        CombatSpatialController spatialAuthority = null,
+        CombatCameraController cameraAuthority = null,
+        CombatDistanceDebugVisualizer distanceDebug = null)
     {
         GameObject panelObject =
             new("Prototype Combat Debug UI");
@@ -34,7 +41,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             new Vector2(0.5f, 0f);
         rect.pivot = new Vector2(0.5f, 0f);
         rect.anchoredPosition = new Vector2(0f, 760f);
-        rect.sizeDelta = new Vector2(960f, 320f);
+        rect.sizeDelta = new Vector2(960f, 380f);
 
         Image background =
             panelObject.AddComponent<Image>();
@@ -52,7 +59,9 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         debugUI.Initialize(
             enemyAutoCombat,
             gestureGrid,
-            spatialAuthority
+            spatialAuthority,
+            cameraAuthority,
+            distanceDebug
         );
         return debugUI;
     }
@@ -60,12 +69,19 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     private void Initialize(
         EnemyAutoCombat enemyAutoCombat,
         CombatGestureGrid gestureGrid,
-        CombatSpatialController spatialAuthority)
+        CombatSpatialController spatialAuthority,
+        CombatCameraController cameraAuthority,
+        CombatDistanceDebugVisualizer distanceDebug)
     {
         enemyAI = enemyAutoCombat;
         spatialController = spatialAuthority;
+        cameraController = cameraAuthority;
+        distanceVisualizer = distanceDebug;
         BuildTitle();
         BuildAIToggle();
+        BuildCameraReset();
+        BuildDistanceToggle();
+        BuildCameraState();
         BuildSpatialState();
 
         gestureDisplay =
@@ -84,7 +100,14 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         }
 
         RefreshAIToggle();
+        RefreshDistanceToggle();
+        RefreshCameraState();
         RefreshSpatialState();
+    }
+
+    private void Update()
+    {
+        RefreshCameraState();
     }
 
     private void OnDestroy()
@@ -105,6 +128,8 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     {
         gestureDisplay?.Clear();
         RefreshAIToggle();
+        cameraController?.ResetCameraView(true);
+        RefreshDistanceToggle();
         RefreshSpatialState();
     }
 
@@ -191,7 +216,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         rect.anchorMin = rect.anchorMax =
             new Vector2(0f, 1f);
         rect.pivot = new Vector2(0f, 1f);
-        rect.anchoredPosition = new Vector2(24f, -278f);
+        rect.anchoredPosition = new Vector2(24f, -338f);
         rect.sizeDelta = new Vector2(910f, 30f);
 
         spatialStateLabel =
@@ -207,6 +232,135 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         spatialStateLabel.color =
             new Color(0.72f, 0.86f, 1f, 1f);
         spatialStateLabel.raycastTarget = false;
+    }
+
+    private void BuildCameraState()
+    {
+        GameObject labelObject =
+            new("Prototype Camera State");
+        labelObject.transform.SetParent(transform, false);
+        RectTransform rect =
+            labelObject.AddComponent<RectTransform>();
+        rect.anchorMin = rect.anchorMax =
+            new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = new Vector2(24f, -306f);
+        rect.sizeDelta = new Vector2(910f, 28f);
+        cameraStateLabel = labelObject.AddComponent<Text>();
+        cameraStateLabel.font =
+            Resources.GetBuiltinResource<Font>(
+                "LegacyRuntime.ttf"
+            );
+        cameraStateLabel.fontSize = 17;
+        cameraStateLabel.fontStyle = FontStyle.Bold;
+        cameraStateLabel.alignment = TextAnchor.MiddleLeft;
+        cameraStateLabel.color =
+            new Color(0.68f, 0.8f, 0.95f, 1f);
+        cameraStateLabel.raycastTarget = false;
+    }
+
+    private void RefreshCameraState()
+    {
+        if (cameraStateLabel == null)
+            return;
+
+        cameraStateLabel.text = cameraController == null
+            ? "CAMERA · indisponible"
+            : $"CAMERA · {(cameraController.IsManualViewActive ? "MANUELLE" : "AUTO")}" +
+              $" · zoom {cameraController.CurrentZoom:0.0}";
+    }
+
+    private void BuildCameraReset()
+    {
+        GameObject buttonObject =
+            CreatePrototypeButton(
+                "Prototype Camera Reset",
+                new Vector2(-20f, -72f),
+                new Vector2(330f, 44f),
+                out cameraResetLabel
+            );
+        cameraResetLabel.text = "Reinitialiser la camera";
+        buttonObject.GetComponent<Button>()
+            .onClick.AddListener(ResetCamera);
+    }
+
+    private void BuildDistanceToggle()
+    {
+        GameObject buttonObject =
+            CreatePrototypeButton(
+                "Prototype Distance Toggle",
+                new Vector2(-20f, -122f),
+                new Vector2(330f, 44f),
+                out distanceToggleLabel
+            );
+        buttonObject.GetComponent<Button>()
+            .onClick.AddListener(ToggleDistanceCircles);
+    }
+
+    private GameObject CreatePrototypeButton(
+        string objectName,
+        Vector2 anchoredPosition,
+        Vector2 size,
+        out Text label)
+    {
+        GameObject buttonObject = new(objectName);
+        buttonObject.transform.SetParent(transform, false);
+        RectTransform rect =
+            buttonObject.AddComponent<RectTransform>();
+        rect.anchorMin = rect.anchorMax =
+            new Vector2(1f, 1f);
+        rect.pivot = new Vector2(1f, 1f);
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = size;
+        Image image = buttonObject.AddComponent<Image>();
+        image.color = new Color(0.18f, 0.34f, 0.5f, 0.96f);
+        buttonObject.AddComponent<Button>();
+
+        GameObject labelObject = new("Label");
+        labelObject.transform.SetParent(
+            buttonObject.transform,
+            false
+        );
+        RectTransform labelRect =
+            labelObject.AddComponent<RectTransform>();
+        labelRect.anchorMin = Vector2.zero;
+        labelRect.anchorMax = Vector2.one;
+        labelRect.offsetMin = Vector2.zero;
+        labelRect.offsetMax = Vector2.zero;
+        label = labelObject.AddComponent<Text>();
+        label.font = Resources.GetBuiltinResource<Font>(
+            "LegacyRuntime.ttf"
+        );
+        label.fontSize = 18;
+        label.fontStyle = FontStyle.Bold;
+        label.alignment = TextAnchor.MiddleCenter;
+        label.color = Color.white;
+        label.raycastTarget = false;
+        return buttonObject;
+    }
+
+    private void ResetCamera()
+    {
+        cameraController?.ResetCameraView(true);
+        RefreshSpatialState();
+    }
+
+    private void ToggleDistanceCircles()
+    {
+        distanceVisualizer?.ToggleVisible();
+        RefreshDistanceToggle();
+    }
+
+    private void RefreshDistanceToggle()
+    {
+        if (distanceToggleLabel == null)
+            return;
+
+        distanceToggleLabel.text =
+            distanceVisualizer != null &&
+            distanceVisualizer.IsVisible
+                ? "Masquer les distances"
+                : "Afficher les distances";
     }
 
     private void ToggleEnemyAI()
@@ -273,8 +427,19 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         if (spatialStateLabel == null)
             return;
 
+        string distanceState = DistanceLabel(snapshot.Distance);
+        if (snapshot.HasPendingDodge &&
+            spatialController.PendingDodge.IsValid)
+        {
+            SpatialDodgeTransaction pending =
+                spatialController.PendingDodge;
+            distanceState =
+                $"{DistanceLabel(pending.DistanceBefore)}" +
+                $" -> {DistanceLabel(pending.DistanceAfter)}";
+        }
+
         spatialStateLabel.text =
-            $"ESPACE · {DistanceLabel(snapshot.Distance)}" +
+            $"ESPACE · {distanceState}" +
             $" · {OrientationLabel(snapshot.Orientation)}" +
             $" · {MovementLabel(snapshot.FirstMovement)}";
     }

@@ -11,6 +11,8 @@ public sealed class CombatManager : MonoBehaviour
     private CombatFeedbackEffects feedbackEffects;
     private PrototypeDebugUI prototypeDebugUI;
     private CombatSpatialController spatialController;
+    private CombatCameraController cameraController;
+    private CombatDistanceDebugVisualizer distanceVisualizer;
     private bool combatEnded;
     private bool isResetting;
 
@@ -95,6 +97,37 @@ public sealed class CombatManager : MonoBehaviour
             RestartCombat
         );
 
+        Camera mainCamera = Camera.main;
+        if (mainCamera != null)
+        {
+            cameraController =
+                mainCamera.GetComponent<CombatCameraController>();
+            if (cameraController == null)
+            {
+                cameraController =
+                    mainCamera.gameObject.AddComponent<
+                        CombatCameraController>();
+            }
+            cameraController.Initialize(
+                mainCamera,
+                playerCombat,
+                enemyCombat,
+                spatialController
+            );
+            hud.GestureGrid?.SetCameraController(
+                cameraController
+            );
+        }
+
+        distanceVisualizer =
+            gameObject.AddComponent<
+                CombatDistanceDebugVisualizer>();
+        distanceVisualizer.Initialize(
+            spatialController,
+            playerCombat,
+            enemyCombat
+        );
+
         enemyAI = enemyCombat.GetComponent<EnemyAutoCombat>();
         if (enemyAI == null)
         {
@@ -107,7 +140,9 @@ public sealed class CombatManager : MonoBehaviour
             hud.transform,
             enemyAI,
             hud.GestureGrid,
-            spatialController
+            spatialController,
+            cameraController,
+            distanceVisualizer
         );
 
         feedbackEffects =
@@ -115,8 +150,9 @@ public sealed class CombatManager : MonoBehaviour
         feedbackEffects.Initialize(
             playerCombat,
             enemyCombat,
-            Camera.main,
-            spatialController
+            mainCamera,
+            spatialController,
+            cameraController
         );
 
         Subscribe();
@@ -158,6 +194,8 @@ public sealed class CombatManager : MonoBehaviour
             spatialController
         );
         prototypeDebugUI?.ResetForReplay();
+        cameraController?.ResetCameraView(true);
+        distanceVisualizer?.ResetForReplay();
         isResetting = false;
     }
 
@@ -181,6 +219,8 @@ public sealed class CombatManager : MonoBehaviour
             spatialController
         );
         prototypeDebugUI?.ResetForReplay();
+        cameraController?.ResetCameraView(true);
+        distanceVisualizer?.ResetForReplay();
     }
 
     private void EndCombat(bool playerWon)
@@ -196,15 +236,26 @@ public sealed class CombatManager : MonoBehaviour
     private void CancelTransientCombatState(
         bool resetFeedback)
     {
-        enemyAI?.StopAI();
-        hud?.SetGridEnabled(false);
-        hud?.GestureGrid?.ResetForReplay();
-        if (resetFeedback)
-            feedbackEffects?.ResetEffects();
+        if (enemyAI != null)
+            enemyAI.StopAI();
+        if (cameraController != null)
+            cameraController.CancelTransientInput();
+        if (hud != null)
+        {
+            hud.SetGridEnabled(false);
+            CombatGestureGrid gestureGrid = hud.GestureGrid;
+            if (gestureGrid != null)
+                gestureGrid.ResetForReplay();
+        }
+        if (resetFeedback && feedbackEffects != null)
+            feedbackEffects.ResetEffects();
 
-        spatialController?.SetCombatEnabled(false);
-        playerCombat?.SetCombatEnabled(false);
-        enemyCombat?.SetCombatEnabled(false);
+        if (spatialController != null)
+            spatialController.SetCombatEnabled(false);
+        if (playerCombat != null)
+            playerCombat.SetCombatEnabled(false);
+        if (enemyCombat != null)
+            enemyCombat.SetCombatEnabled(false);
     }
 
     private void Subscribe()
