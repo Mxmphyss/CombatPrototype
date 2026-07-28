@@ -216,10 +216,9 @@ public static class V061PlayModeValidation
             Quaternion.Angle(
                 stableCameraRotation,
                 Camera.main.transform.rotation
-            ) >= 0.1f,
-            "Runtime camera did not rotate with the player."
+            ) <= 0.1f,
+            "Runtime camera rotated the map during player strafe."
         );
-        RequireCameraBehindPlayer("runtime strafe");
         RequirePlayerScreenAnchor("runtime strafe");
         cameraController.ResetCameraView(true);
         RequirePairVisible("runtime strafe");

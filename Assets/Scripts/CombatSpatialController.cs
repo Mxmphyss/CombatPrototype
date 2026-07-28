@@ -1509,12 +1509,9 @@ public sealed class CombatSpatialController : MonoBehaviour
         Vector3 rotatedRelative =
             Quaternion.AngleAxis(angle, Vector3.up) *
             relative;
-        Vector3 midpoint =
-            (fighterPosition + otherPosition) * 0.5f;
         Vector3 fighterEndPosition =
-            midpoint + rotatedRelative * 0.5f;
-        Vector3 otherEndPosition =
-            midpoint - rotatedRelative * 0.5f;
+            otherPosition + rotatedRelative;
+        Vector3 otherEndPosition = otherPosition;
         fighterEndPosition.y = fighterPosition.y;
         otherEndPosition.y = otherPosition.y;
 

@@ -120,6 +120,8 @@ public static class V061CorrectionValidation
         ValidationContext context)
     {
         context.Controller.ResetDuel();
+        Vector3 stationaryOpponentPosition =
+            context.SecondCombat.transform.position;
         CommitDodge(
             context,
             DodgeDirection.Left,
@@ -134,6 +136,13 @@ public static class V061CorrectionValidation
             context.Controller.Snapshot.Separation,
             6f,
             "A lateral dodge must preserve the distance anchor."
+        );
+        Require(
+            Vector3.Distance(
+                stationaryOpponentPosition,
+                context.SecondCombat.transform.position
+            ) <= Tolerance,
+            "A lateral dodge moved the stationary opponent."
         );
         Quaternion firstFlankRotation =
             context.Controller.Snapshot.FirstNeutralPose.rotation;
@@ -566,6 +575,9 @@ public static class V061CorrectionValidation
             "Camera zoom escaped its configured limits."
         );
         Quaternion initialRotation = camera.transform.rotation;
+        Vector3 initialCameraOffset =
+            camera.transform.position -
+            context.FirstCombat.transform.position;
         Vector3 initialPlayerViewport =
             camera.WorldToViewportPoint(
                 context.FirstCombat.transform.position
@@ -611,11 +623,6 @@ public static class V061CorrectionValidation
         );
         controller.ResetCameraView(true);
         RequirePairVisible(camera, context, "left flank");
-        RequireCameraBehindPlayer(
-            camera,
-            context,
-            "left flank"
-        );
         RequirePlayerScreenAnchor(
             camera,
             context,
@@ -626,8 +633,16 @@ public static class V061CorrectionValidation
             Quaternion.Angle(
                 initialRotation,
                 camera.transform.rotation
-            ) >= 1f,
-            "Camera did not follow the player to the left flank."
+            ) <= Tolerance,
+            "Camera rotated the map during a lateral dodge."
+        );
+        Require(
+            Vector3.Distance(
+                initialCameraOffset,
+                camera.transform.position -
+                context.FirstCombat.transform.position
+            ) <= Tolerance,
+            "Camera did not preserve its player-relative offset."
         );
 
         context.Controller.ResetDuel();
@@ -683,13 +698,8 @@ public static class V061CorrectionValidation
             Quaternion.Angle(
                 initialRotation,
                 camera.transform.rotation
-            ) >= 1f,
-            "Camera did not rotate with the player during strafe."
-        );
-        RequireCameraBehindPlayer(
-            camera,
-            context,
-            "prolonged strafe"
+            ) <= Tolerance,
+            "Camera rotated the map during player strafe."
         );
         RequirePlayerScreenAnchor(
             camera,
@@ -698,6 +708,51 @@ public static class V061CorrectionValidation
             "prolonged strafe"
         );
         context.Controller.StopAllMovement();
+
+        context.Controller.ResetDuel();
+        controller.ResetCameraView(true);
+        Vector3 playerBeforeEnemyDodge =
+            context.FirstCombat.transform.position;
+        Vector3 cameraBeforeEnemyDodge =
+            camera.transform.position;
+        Quaternion cameraRotationBeforeEnemyDodge =
+            camera.transform.rotation;
+        Require(
+            context.Controller.TryPrepareDodge(
+                context.SecondCombat,
+                DodgeDirection.Left,
+                out SpatialDodgeTransaction enemyDodge
+            ),
+            "Unable to prepare the enemy-only dodge."
+        );
+        context.Controller.PreviewPreparedDodge(
+            enemyDodge.Id,
+            1f
+        );
+        Require(
+            context.Controller.CommitDodge(enemyDodge),
+            "Unable to commit the enemy-only dodge."
+        );
+        controller.ResetCameraView(true);
+        Require(
+            Vector3.Distance(
+                playerBeforeEnemyDodge,
+                context.FirstCombat.transform.position
+            ) <= Tolerance,
+            "An enemy dodge moved the player."
+        );
+        Require(
+            Vector3.Distance(
+                cameraBeforeEnemyDodge,
+                camera.transform.position
+            ) <= Tolerance &&
+            Quaternion.Angle(
+                cameraRotationBeforeEnemyDodge,
+                camera.transform.rotation
+            ) <= Tolerance,
+            "Enemy movement displaced or rotated the camera."
+        );
+
         context.Controller.ResetDuel();
         UnityEngine.Object.DestroyImmediate(cameraObject);
     }

@@ -26,7 +26,7 @@ public sealed class CombatCameraController : MonoBehaviour
     private Camera combatCamera;
     private FighterCombat player;
     private FighterCombat opponent;
-    private Quaternion neutralCameraLocalRotation;
+    private Quaternion neutralCameraRotation;
     private Vector3 neutralPlayerOffset;
     private Vector3 manualPanOffset;
     private Vector3 shakeOffset;
@@ -65,17 +65,11 @@ public sealed class CombatCameraController : MonoBehaviour
             return;
         }
 
-        Quaternion initialDuelRotation =
-            CalculateDuelFrameRotation();
-        neutralCameraLocalRotation =
-            Quaternion.Inverse(initialDuelRotation) *
+        neutralCameraRotation =
             combatCamera.transform.rotation;
         neutralPlayerOffset =
-            Quaternion.Inverse(initialDuelRotation) *
-            (
-                combatCamera.transform.position -
-                player.transform.position
-            );
+            combatCamera.transform.position -
+            player.transform.position;
         neutralZoom = combatCamera.orthographic
             ? combatCamera.orthographicSize
             : combatCamera.fieldOfView;
@@ -154,9 +148,7 @@ public sealed class CombatCameraController : MonoBehaviour
         Vector3 worldPanDelta =
             (-right * normalizedDelta.x -
              up * normalizedDelta.y) * panSensitivity;
-        manualPanOffset +=
-            Quaternion.Inverse(CalculateDuelFrameRotation()) *
-            worldPanDelta;
+        manualPanOffset += worldPanDelta;
     }
 
     internal void ApplyPinchDelta(float normalizedDelta)
@@ -280,10 +272,9 @@ public sealed class CombatCameraController : MonoBehaviour
     private Vector3 CalculateTargetPosition()
     {
         Vector3 playerPosition = GetNeutralPosition(player);
-        Quaternion duelRotation = CalculateDuelFrameRotation();
         return playerPosition +
-            duelRotation *
-            (neutralPlayerOffset + manualPanOffset);
+            neutralPlayerOffset +
+            manualPanOffset;
     }
 
     private float RequiredAutomaticZoom(
@@ -394,32 +385,7 @@ public sealed class CombatCameraController : MonoBehaviour
 
     private Quaternion CalculateTargetRotation()
     {
-        return CalculateDuelFrameRotation() *
-            neutralCameraLocalRotation;
-    }
-
-    private Quaternion CalculateDuelFrameRotation()
-    {
-        Vector3 duelDirection =
-            opponent != null
-                ? Horizontal(
-                    opponent.transform.position -
-                    player.transform.position
-                )
-                : Horizontal(player.transform.forward);
-        if (duelDirection.sqrMagnitude <= 0.000001f)
-            duelDirection = Vector3.forward;
-
-        return Quaternion.LookRotation(
-            duelDirection.normalized,
-            Vector3.up
-        );
-    }
-
-    private static Vector3 Horizontal(Vector3 value)
-    {
-        value.y = 0f;
-        return value;
+        return neutralCameraRotation;
     }
 
     private void SetMultiTouchActive(bool active)
