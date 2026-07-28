@@ -353,6 +353,17 @@ public static class V06SpatialValidation
             ExpectedBackMultiplier,
             "Back damage multiplier is incorrect."
         );
+
+        CommitDodge(
+            context.Controller,
+            context.FirstCombat,
+            DodgeDirection.Right
+        );
+        RequireEqual(
+            context.Controller.CurrentOrientation,
+            RelativeOrientation.RightFlank,
+            "A lateral dodge from Back must remain available."
+        );
     }
 
     private static void ValidateDodgeCompensation(

@@ -1407,6 +1407,16 @@ public sealed class CombatSpatialController : MonoBehaviour
             return true;
         }
 
+        if (relativeOrientation == RelativeOrientation.Back)
+        {
+            orientationAfter =
+                direction == DodgeDirection.Left
+                    ? RelativeOrientation.LeftFlank
+                    : RelativeOrientation.RightFlank;
+            advantageAfter = fighter;
+            return true;
+        }
+
         if (!IsFlank(relativeOrientation) ||
             !flankDodgeDirection.HasValue)
         {
@@ -1417,11 +1427,16 @@ public sealed class CombatSpatialController : MonoBehaviour
             direction == flankDodgeDirection.Value;
         if (advantageFighter != fighter)
         {
-            if (!sameDirection)
-                return false;
-
-            orientationAfter = RelativeOrientation.Face;
-            advantageAfter = null;
+            if (sameDirection)
+            {
+                orientationAfter = RelativeOrientation.Face;
+                advantageAfter = null;
+            }
+            else
+            {
+                orientationAfter = RelativeOrientation.Back;
+                advantageAfter = fighter;
+            }
             return true;
         }
 

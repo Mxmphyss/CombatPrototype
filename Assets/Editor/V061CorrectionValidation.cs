@@ -169,6 +169,65 @@ public static class V061CorrectionValidation
                 RelativeOrientation.Back,
             "A radial dodge erased the lateral sequence toward Back."
         );
+        Require(
+            context.Controller.CanDodge(
+                context.FirstCombat,
+                DodgeDirection.Left
+            ) &&
+            context.Controller.CanDodge(
+                context.FirstCombat,
+                DodgeDirection.Right
+            ),
+            "A fighter must be able to dodge laterally from Back."
+        );
+        CommitDodge(
+            context,
+            DodgeDirection.Right,
+            DistanceLevel.CloseRange
+        );
+        Require(
+            context.Controller.CurrentOrientation ==
+                RelativeOrientation.RightFlank,
+            "A right dodge from Back must reach the right flank."
+        );
+
+        context.Controller.ResetDuel();
+        CommitDodge(
+            context,
+            DodgeDirection.Right,
+            DistanceLevel.MidRange
+        );
+        Require(
+            context.Controller.CanDodge(
+                context.SecondCombat,
+                DodgeDirection.Left
+            ),
+            "The disadvantaged fighter must be able to dodge " +
+            "in either lateral direction."
+        );
+        Require(
+            context.Controller.TryPrepareDodge(
+                context.SecondCombat,
+                DodgeDirection.Left,
+                out SpatialDodgeTransaction counterDodge
+            ),
+            "Unable to prepare the disadvantaged fighter dodge."
+        );
+        context.Controller.PreviewPreparedDodge(
+            counterDodge.Id,
+            1f
+        );
+        Require(
+            context.Controller.CommitDodge(counterDodge),
+            "Unable to commit the disadvantaged fighter dodge."
+        );
+        Require(
+            context.Controller.CurrentOrientation ==
+                RelativeOrientation.Back &&
+            context.Controller.AdvantageFighter ==
+                context.SecondCombat,
+            "The counter-dodge must grant the new back advantage."
+        );
         context.Controller.ResetDuel();
     }
 
@@ -637,6 +696,18 @@ public static class V061CorrectionValidation
             "Long Range Debug Circle",
             DistanceLevel.LongRange
         );
+        ValidateRangeFill(
+            context,
+            "Close Range Debug Fill"
+        );
+        ValidateRangeFill(
+            context,
+            "Mid Range Debug Fill"
+        );
+        ValidateRangeFill(
+            context,
+            "Long Range Debug Fill"
+        );
         LineRenderer close = context.SecondCombat.transform
             .Find("Close Range Debug Circle")
             .GetComponent<LineRenderer>();
@@ -683,6 +754,39 @@ public static class V061CorrectionValidation
             new Vector2(sample.x, sample.z).magnitude,
             context.Controller.GetDistance(level),
             $"{objectName} does not use the spatial distance."
+        );
+    }
+
+    private static void ValidateRangeFill(
+        ValidationContext context,
+        string objectName)
+    {
+        Transform fillTransform =
+            context.SecondCombat.transform.Find(objectName);
+        Require(
+            fillTransform != null,
+            $"Missing distance fill {objectName}."
+        );
+        Require(
+            fillTransform.parent ==
+                context.SecondCombat.transform,
+            $"{objectName} does not follow the opponent."
+        );
+        MeshFilter filter =
+            fillTransform.GetComponent<MeshFilter>();
+        MeshRenderer renderer =
+            fillTransform.GetComponent<MeshRenderer>();
+        Require(
+            filter != null &&
+            filter.sharedMesh != null &&
+            filter.sharedMesh.vertexCount >= 25,
+            $"{objectName} is not a filled mesh."
+        );
+        Require(
+            renderer != null &&
+            renderer.sharedMaterial != null &&
+            renderer.sharedMaterial.color.a > 0f,
+            $"{objectName} has no visible fill color."
         );
     }
 

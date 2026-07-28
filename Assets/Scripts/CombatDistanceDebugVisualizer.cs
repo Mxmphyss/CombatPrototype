@@ -10,6 +10,12 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
     [Min(0.005f)]
     [SerializeField] private float lineWidth = 0.035f;
     [SerializeField] private float groundLocalY = -0.98f;
+    [Range(0.02f, 0.8f)]
+    [SerializeField] private float fillOpacity = 0.2f;
+    [Range(0.02f, 0.9f)]
+    [SerializeField] private float activeFillOpacity = 0.34f;
+    [Min(0f)]
+    [SerializeField] private float fillLocalYOffset = 0.008f;
     [SerializeField] private Color closeColor =
         new(0.25f, 0.9f, 0.38f, 0.42f);
     [SerializeField] private Color midColor =
@@ -28,6 +34,14 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
     private FighterCombat opponent;
     private readonly LineRenderer[] circles =
         new LineRenderer[3];
+    private readonly MeshRenderer[] rangeFills =
+        new MeshRenderer[3];
+    private readonly Mesh[] rangeMeshes =
+        new Mesh[3];
+    private readonly Material[] rangeMaterials =
+        new Material[3];
+    private readonly Color[] rangeColors =
+        new Color[3];
     private LineRenderer playerFacing;
     private LineRenderer opponentFacing;
     private Material lineMaterial;
@@ -73,6 +87,42 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
             DistanceLevel.LongRange,
             longColor
         );
+        rangeColors[0] = closeColor;
+        rangeColors[1] = midColor;
+        rangeColors[2] = longColor;
+        float closeRadius =
+            spatialController.GetDistance(
+                DistanceLevel.CloseRange
+            );
+        float midRadius =
+            spatialController.GetDistance(
+                DistanceLevel.MidRange
+            );
+        float longRadius =
+            spatialController.GetDistance(
+                DistanceLevel.LongRange
+            );
+        rangeFills[0] = CreateRangeFill(
+            "Close Range Debug Fill",
+            0f,
+            closeRadius,
+            closeColor,
+            0
+        );
+        rangeFills[1] = CreateRangeFill(
+            "Mid Range Debug Fill",
+            closeRadius,
+            midRadius,
+            midColor,
+            1
+        );
+        rangeFills[2] = CreateRangeFill(
+            "Long Range Debug Fill",
+            midRadius,
+            longRadius,
+            longColor,
+            2
+        );
         playerFacing = CreateFacingMarker(
             player.transform,
             "Player Facing Debug",
@@ -101,6 +151,16 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
 
         if (lineMaterial != null)
             Destroy(lineMaterial);
+
+        for (int index = 0;
+             index < rangeMaterials.Length;
+             index++)
+        {
+            if (rangeMaterials[index] != null)
+                Destroy(rangeMaterials[index]);
+            if (rangeMeshes[index] != null)
+                Destroy(rangeMeshes[index]);
+        }
     }
 
     public void SetVisible(bool show)
@@ -164,6 +224,148 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
         return line;
     }
 
+    private MeshRenderer CreateRangeFill(
+        string objectName,
+        float innerRadius,
+        float outerRadius,
+        Color color,
+        int index)
+    {
+        GameObject fillObject = new(objectName);
+        fillObject.transform.SetParent(
+            opponent.transform,
+            false
+        );
+        fillObject.transform.localPosition =
+            new Vector3(
+                0f,
+                groundLocalY +
+                fillLocalYOffset +
+                index * 0.001f,
+                0f
+            );
+        fillObject.transform.localRotation =
+            Quaternion.identity;
+
+        Mesh mesh = CreateRangeMesh(
+            innerRadius,
+            outerRadius
+        );
+        rangeMeshes[index] = mesh;
+        MeshFilter filter =
+            fillObject.AddComponent<MeshFilter>();
+        filter.sharedMesh = mesh;
+
+        Material material = new(
+            Shader.Find("Sprites/Default")
+        )
+        {
+            hideFlags = HideFlags.HideAndDontSave
+        };
+        Color fillColor = color;
+        fillColor.a = fillOpacity;
+        material.color = fillColor;
+        rangeMaterials[index] = material;
+
+        MeshRenderer renderer =
+            fillObject.AddComponent<MeshRenderer>();
+        renderer.sharedMaterial = material;
+        renderer.shadowCastingMode =
+            UnityEngine.Rendering.ShadowCastingMode.Off;
+        renderer.receiveShadows = false;
+        renderer.sortingOrder = -20 + index;
+        return renderer;
+    }
+
+    private Mesh CreateRangeMesh(
+        float innerRadius,
+        float outerRadius)
+    {
+        int segments = Mathf.Max(24, circleSegments);
+        bool isDisc = innerRadius <= 0.001f;
+        Mesh mesh = new()
+        {
+            name = isDisc
+                ? "Combat Distance Disc"
+                : "Combat Distance Ring",
+            hideFlags = HideFlags.HideAndDontSave
+        };
+
+        if (isDisc)
+        {
+            Vector3[] vertices =
+                new Vector3[segments + 2];
+            int[] triangles = new int[segments * 3];
+            vertices[0] = Vector3.zero;
+            for (int step = 0; step <= segments; step++)
+            {
+                float angle =
+                    step / (float)segments *
+                    Mathf.PI * 2f;
+                vertices[step + 1] =
+                    PointOnCircle(outerRadius, angle);
+            }
+
+            for (int step = 0; step < segments; step++)
+            {
+                int triangle = step * 3;
+                triangles[triangle] = 0;
+                triangles[triangle + 1] = step + 2;
+                triangles[triangle + 2] = step + 1;
+            }
+
+            mesh.vertices = vertices;
+            mesh.triangles = triangles;
+        }
+        else
+        {
+            Vector3[] vertices =
+                new Vector3[(segments + 1) * 2];
+            int[] triangles = new int[segments * 6];
+            for (int step = 0; step <= segments; step++)
+            {
+                float angle =
+                    step / (float)segments *
+                    Mathf.PI * 2f;
+                int vertex = step * 2;
+                vertices[vertex] =
+                    PointOnCircle(innerRadius, angle);
+                vertices[vertex + 1] =
+                    PointOnCircle(outerRadius, angle);
+            }
+
+            for (int step = 0; step < segments; step++)
+            {
+                int vertex = step * 2;
+                int next = vertex + 2;
+                int triangle = step * 6;
+                triangles[triangle] = vertex;
+                triangles[triangle + 1] = next + 1;
+                triangles[triangle + 2] = vertex + 1;
+                triangles[triangle + 3] = vertex;
+                triangles[triangle + 4] = next;
+                triangles[triangle + 5] = next + 1;
+            }
+
+            mesh.vertices = vertices;
+            mesh.triangles = triangles;
+        }
+
+        mesh.RecalculateBounds();
+        return mesh;
+    }
+
+    private static Vector3 PointOnCircle(
+        float radius,
+        float angle)
+    {
+        return new Vector3(
+            Mathf.Cos(angle) * radius,
+            0f,
+            Mathf.Sin(angle) * radius
+        );
+    }
+
     private LineRenderer CreateFacingMarker(
         Transform fighter,
         string objectName,
@@ -205,6 +407,7 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
             UnityEngine.Rendering.ShadowCastingMode.Off;
         line.receiveShadows = false;
         line.generateLightingData = false;
+        line.sortingOrder = 10;
     }
 
     private void HandleSnapshotChanged(
@@ -228,6 +431,16 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
                 : lineWidth;
             circle.startWidth = width;
             circle.endWidth = width;
+
+            Material fillMaterial = rangeMaterials[index];
+            if (fillMaterial == null)
+                continue;
+
+            Color fillColor = rangeColors[index];
+            fillColor.a = current
+                ? activeFillOpacity
+                : fillOpacity;
+            fillMaterial.color = fillColor;
         }
     }
 
@@ -237,6 +450,8 @@ public sealed class CombatDistanceDebugVisualizer : MonoBehaviour
         {
             if (circles[index] != null)
                 circles[index].gameObject.SetActive(visible);
+            if (rangeFills[index] != null)
+                rangeFills[index].gameObject.SetActive(visible);
         }
 
         if (playerFacing != null)
