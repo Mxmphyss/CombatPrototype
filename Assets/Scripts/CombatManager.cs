@@ -142,7 +142,8 @@ public sealed class CombatManager : MonoBehaviour
             hud.GestureGrid,
             spatialController,
             cameraController,
-            distanceVisualizer
+            distanceVisualizer,
+            hud.EnemyPanel
         );
 
         feedbackEffects =

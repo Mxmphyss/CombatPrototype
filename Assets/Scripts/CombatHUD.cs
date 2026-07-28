@@ -32,6 +32,7 @@ public sealed class CombatHUD : MonoBehaviour
     private StatBar playerStaminaBar;
     private StatBar enemyHealthBar;
     private StatBar enemyStaminaBar;
+    private RectTransform enemyPanel;
     private Text enemyStatusText;
     private Text feedbackText;
     private CanvasGroup feedbackGroup;
@@ -42,6 +43,7 @@ public sealed class CombatHUD : MonoBehaviour
 
     public bool BattleEnded { get; private set; }
     public CombatGestureGrid GestureGrid => gestureGrid;
+    public RectTransform EnemyPanel => enemyPanel;
 
     public static CombatHUD Create(
         FighterCombat player,
@@ -251,7 +253,7 @@ public sealed class CombatHUD : MonoBehaviour
 
     private void BuildEnemyPanel(Transform parent)
     {
-        RectTransform panel = CreatePanel(
+        enemyPanel = CreatePanel(
             parent,
             "Enemy HUD",
             new Vector2(0.5f, 1f),
@@ -260,6 +262,8 @@ public sealed class CombatHUD : MonoBehaviour
             new Vector2(0f, -22f),
             new Vector2(920f, 176f)
         );
+
+        RectTransform panel = enemyPanel;
 
         Text enemyName = CreateText(
             panel,

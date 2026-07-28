@@ -29,18 +29,28 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         CombatGestureGrid gestureGrid,
         CombatSpatialController spatialAuthority = null,
         CombatCameraController cameraAuthority = null,
-        CombatDistanceDebugVisualizer distanceDebug = null)
+        CombatDistanceDebugVisualizer distanceDebug = null,
+        RectTransform enemyPanel = null)
     {
         GameObject panelObject =
             new("Prototype Combat Debug UI");
-        panelObject.transform.SetParent(parent, false);
+        Transform layoutParent = enemyPanel != null
+            ? enemyPanel.parent
+            : parent;
+        panelObject.transform.SetParent(layoutParent, false);
 
         RectTransform rect =
             panelObject.AddComponent<RectTransform>();
         rect.anchorMin = rect.anchorMax =
-            new Vector2(0.5f, 0f);
-        rect.pivot = new Vector2(0.5f, 0f);
-        rect.anchoredPosition = new Vector2(0f, 760f);
+            new Vector2(0.5f, 1f);
+        rect.pivot = new Vector2(0.5f, 1f);
+        float enemyPanelBottom = enemyPanel != null
+            ? enemyPanel.anchoredPosition.y - enemyPanel.rect.height
+            : -216f;
+        rect.anchoredPosition = new Vector2(
+            0f,
+            enemyPanelBottom - 18f
+        );
         rect.sizeDelta = new Vector2(960f, 380f);
 
         Image background =
