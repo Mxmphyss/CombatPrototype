@@ -979,8 +979,6 @@ public sealed class CombatSpatialController : MonoBehaviour
         if (!CanApplyPermutation || !Contains(instigator))
             return false;
 
-        RelativeOrientation previousOrientation =
-            relativeOrientation;
         SpatialDodgeTransaction cancelled =
             hasPendingDodge ? pendingDodge : default;
         StopAllMovementInternal();
@@ -996,12 +994,8 @@ public sealed class CombatSpatialController : MonoBehaviour
             instigator,
             nextDistance
         );
-        relativeOrientation = RelativeOrientation.Face;
         distanceLevel = nextDistance;
-        advantageFighter = null;
-        flankDodgeDirection = null;
         flankElapsed = 0f;
-        SetFaceRotations();
         ApplyNeutralPosesToTransforms();
 
         Publish(
@@ -1009,13 +1003,6 @@ public sealed class CombatSpatialController : MonoBehaviour
             instigator,
             cancelled.Id
         );
-        if (previousOrientation != relativeOrientation)
-        {
-            OnOrientationChanged?.Invoke(
-                previousOrientation,
-                relativeOrientation
-            );
-        }
         if (cancelled.IsValid)
             OnDodgeCancelled?.Invoke(cancelled);
         return true;

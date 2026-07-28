@@ -378,6 +378,61 @@ public static class V061CorrectionValidation
             49f,
             "A refused permutation spent stamina."
         );
+
+        context.Controller.ResetDuel();
+        CommitDodge(
+            context,
+            DodgeDirection.Right,
+            DistanceLevel.MidRange
+        );
+        Quaternion firstFlankRotation =
+            context.Controller.Snapshot.FirstNeutralPose.rotation;
+        Quaternion secondFlankRotation =
+            context.Controller.Snapshot.SecondNeutralPose.rotation;
+        context.FirstStats.SetStamina(100f);
+        Require(
+            context.FirstCombat.TryPermutation(5) ==
+                CombatActionResult.Started,
+            "A permutation from the right flank was refused."
+        );
+        RequireDistance(
+            context,
+            DistanceLevel.LongRange,
+            9f,
+            "A flank permutation did not change distance."
+        );
+        Require(
+            context.Controller.CurrentOrientation ==
+                RelativeOrientation.RightFlank &&
+            context.Controller.AdvantageFighter ==
+                context.FirstCombat,
+            "A permutation erased the existing flank advantage."
+        );
+        Require(
+            Quaternion.Angle(
+                firstFlankRotation,
+                context.Controller.Snapshot.FirstNeutralPose.rotation
+            ) <= Tolerance &&
+            Quaternion.Angle(
+                secondFlankRotation,
+                context.Controller.Snapshot.SecondNeutralPose.rotation
+            ) <= Tolerance,
+            "A flank permutation forced the fighters to face."
+        );
+        CommitDodge(
+            context,
+            DodgeDirection.Right,
+            DistanceLevel.LongRange
+        );
+        Require(
+            context.Controller.CurrentOrientation ==
+                RelativeOrientation.Back &&
+            context.Controller.AdvantageFighter ==
+                context.FirstCombat,
+            "Permutation did not preserve the lateral sequence."
+        );
+
+        context.Controller.ResetDuel();
     }
 
     private static void ValidateGestureShapes()
