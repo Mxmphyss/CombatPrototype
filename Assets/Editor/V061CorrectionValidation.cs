@@ -17,6 +17,7 @@ public static class V061CorrectionValidation
             ValidateDiscreteDistances(context);
             ValidateTransactionalCancellation(context);
             ValidateLateralOrientation(context);
+            ValidateSymmetricAttackOrientation(context);
             ValidateCyclicPermutation(context);
             ValidateGestureShapes();
             ValidateCameraReset(context);
@@ -228,6 +229,80 @@ public static class V061CorrectionValidation
                 context.SecondCombat,
             "The counter-dodge must grant the new back advantage."
         );
+        context.Controller.ResetDuel();
+    }
+
+    private static void ValidateSymmetricAttackOrientation(
+        ValidationContext context)
+    {
+        context.Controller.ResetDuel();
+        CommitDodge(
+            context,
+            DodgeDirection.Right,
+            DistanceLevel.MidRange
+        );
+
+        Require(
+            context.Controller.CanAttackTarget(
+                context.FirstCombat,
+                context.SecondCombat
+            ),
+            "The fighter with flank advantage must be able to attack."
+        );
+        Require(
+            !context.Controller.CanAttackTarget(
+                context.SecondCombat,
+                context.FirstCombat
+            ),
+            "The disadvantaged fighter must face the target before attacking."
+        );
+
+        float staminaBefore =
+            context.SecondCombat.Stats.CurrentStamina;
+        CombatActionResult refusedAttack =
+            context.SecondCombat.LightAttack();
+        Require(
+            refusedAttack == CombatActionResult.Unavailable &&
+            context.SecondCombat.LastRefusalReason ==
+                CombatRefusalReason.IncompatibleOrientation,
+            "A disadvantaged attack was not refused by orientation."
+        );
+        RequireNear(
+            context.SecondCombat.Stats.CurrentStamina,
+            staminaBefore,
+            "A refused positional attack consumed stamina."
+        );
+
+        Require(
+            context.Controller.TryPrepareDodge(
+                context.SecondCombat,
+                DodgeDirection.Right,
+                out SpatialDodgeTransaction compensation
+            ),
+            "Unable to prepare the opponent facing compensation."
+        );
+        context.Controller.PreviewPreparedDodge(
+            compensation.Id,
+            1f
+        );
+        Require(
+            context.Controller.CommitDodge(compensation),
+            "Unable to commit the opponent facing compensation."
+        );
+        Require(
+            context.Controller.CurrentOrientation ==
+                RelativeOrientation.Face &&
+            context.Controller.CanAttackTarget(
+                context.FirstCombat,
+                context.SecondCombat
+            ) &&
+            context.Controller.CanAttackTarget(
+                context.SecondCombat,
+                context.FirstCombat
+            ),
+            "Both fighters must be able to attack after facing again."
+        );
+
         context.Controller.ResetDuel();
     }
 

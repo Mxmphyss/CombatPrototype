@@ -1030,6 +1030,21 @@ public sealed class CombatSpatialController : MonoBehaviour
         );
     }
 
+    public bool CanAttackTarget(
+        FighterCombat attacker,
+        FighterCombat defender)
+    {
+        if (!IsInitialized ||
+            !Contains(attacker) ||
+            defender != GetOtherFighter(attacker))
+        {
+            return true;
+        }
+
+        return relativeOrientation == RelativeOrientation.Face ||
+               advantageFighter == attacker;
+    }
+
     public RelativeOrientation GetAttackOrientation(
         FighterCombat attacker,
         FighterCombat defender)

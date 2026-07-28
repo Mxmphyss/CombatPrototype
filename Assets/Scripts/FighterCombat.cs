@@ -277,6 +277,19 @@ public class FighterCombat : MonoBehaviour
                 CombatRefusalReason.Busy
             );
 
+        if (spatialController != null &&
+            targetCombat != null &&
+            !spatialController.CanAttackTarget(
+                this,
+                targetCombat
+            ))
+        {
+            return Refuse(
+                CombatActionResult.Unavailable,
+                CombatRefusalReason.IncompatibleOrientation
+            );
+        }
+
         if (!fighterStats.SpendStamina(lightAttackStaminaCost))
         {
             return Refuse(
