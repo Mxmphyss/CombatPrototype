@@ -1153,7 +1153,6 @@ public sealed class CombatSpatialController : MonoBehaviour
             return;
         }
 
-        flankElapsed = 0f;
         Publish(
             CombatSpatialChangeReason.SignificantAction,
             null,
@@ -1394,7 +1393,19 @@ public sealed class CombatSpatialController : MonoBehaviour
     private void UpdateAutoFace(float deltaTime)
     {
         if (!settings.AutoFaceFlanks ||
-            !IsFlank(relativeOrientation) ||
+            !IsFlank(relativeOrientation))
+        {
+            return;
+        }
+
+        flankElapsed += Mathf.Max(0f, deltaTime);
+        if (flankElapsed < settings.FlankAutoFaceDelay)
+            return;
+
+        // The countdown belongs to the spatial flank state. Combat
+        // actions may continue, but the actual rotation waits for a
+        // neutral frame so it cannot overwrite an animation offset.
+        if (
             hasPendingDodge ||
             firstMovement != SpatialMovementType.None ||
             secondMovement != SpatialMovementType.None ||
@@ -1403,10 +1414,6 @@ public sealed class CombatSpatialController : MonoBehaviour
         {
             return;
         }
-
-        flankElapsed += Mathf.Max(0f, deltaTime);
-        if (flankElapsed < settings.FlankAutoFaceDelay)
-            return;
 
         RelativeOrientation previousOrientation =
             relativeOrientation;

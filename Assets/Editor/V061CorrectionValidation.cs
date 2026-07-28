@@ -20,6 +20,7 @@ public static class V061CorrectionValidation
             ValidateSymmetricAttackOrientation(context);
             ValidateDodgeTimingWindows(context);
             ValidateDodgePreservesOtherAnimation(context);
+            ValidateAutoFaceDuringActions(context);
             ValidateCyclicPermutation(context);
             ValidateGestureShapes();
             ValidateCameraReset(context);
@@ -397,6 +398,49 @@ public static class V061CorrectionValidation
         context.Controller.RestoreNeutralPose(
             context.SecondCombat
         );
+        context.Controller.ResetDuel();
+    }
+
+    private static void ValidateAutoFaceDuringActions(
+        ValidationContext context)
+    {
+        context.Controller.ResetDuel();
+        context.FirstCombat.ResetCombatState();
+        context.SecondCombat.ResetCombatState();
+        CommitDodge(
+            context,
+            DodgeDirection.Right,
+            DistanceLevel.MidRange
+        );
+
+        Require(
+            context.SecondCombat.StartCharge() ==
+                CombatActionResult.Started,
+            "Unable to start the action-safe auto-face test."
+        );
+        Invoke(
+            context.Controller,
+            "UpdateAutoFace",
+            3.01f
+        );
+        Require(
+            context.Controller.CurrentOrientation ==
+                RelativeOrientation.RightFlank,
+            "Auto-face rotated the duel during an active action."
+        );
+
+        context.SecondCombat.StopChargeInput();
+        Invoke(
+            context.Controller,
+            "UpdateAutoFace",
+            0f
+        );
+        Require(
+            context.Controller.CurrentOrientation ==
+                RelativeOrientation.Face,
+            "The elapsed flank timer did not auto-face at the next safe frame."
+        );
+
         context.Controller.ResetDuel();
     }
 
