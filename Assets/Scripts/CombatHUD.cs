@@ -551,19 +551,28 @@ public sealed class CombatHUD : MonoBehaviour
 
     private void HandleAttackResolved(CombatImpact impact)
     {
-        if (BattleEnded || impact.Target != playerCombat)
+        if (BattleEnded)
+            return;
+
+        if (impact.Result == CombatHitResult.Missed)
+        {
+            bool playerMissed =
+                impact.Attacker == playerCombat;
+            ShowMessage(
+                playerMissed
+                    ? "Votre attaque manque la cible"
+                    : "Attaque ennemie hors cible",
+                new Color(0.76f, 0.78f, 0.84f),
+                0.9f
+            );
+            return;
+        }
+
+        if (impact.Target != playerCombat)
             return;
 
         switch (impact.Result)
         {
-            case CombatHitResult.Missed:
-                ShowMessage(
-                    "Attaque hors cible",
-                    new Color(0.76f, 0.78f, 0.84f),
-                    0.9f
-                );
-                break;
-
             case CombatHitResult.GuardBroken:
                 ShowMessage(
                     "Garde brisee",

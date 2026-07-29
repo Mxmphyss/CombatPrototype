@@ -1096,7 +1096,10 @@ public sealed class CombatActionRunner
         bool wasAttack =
             currentAction != null && IsAttack(currentAction.Id);
         if (wasAttack && !hitRegistered)
+        {
             SetOutcome(CombatFrameOutcome.Whiff);
+            RaiseWhiffFeedback();
+        }
 
         if (hasDodgeTransaction)
         {
@@ -1113,6 +1116,31 @@ public sealed class CombatActionRunner
         owner?.FrameRestoreNeutralPose();
         CurrentPhase = CombatActionPhase.Idle;
         ApplyStateToOwner();
+    }
+
+    private void RaiseWhiffFeedback()
+    {
+        if (owner == null || target == null)
+            return;
+
+        RelativeOrientation orientation = spatial != null
+            ? spatial.GetAttackOrientation(owner, target)
+            : RelativeOrientation.Face;
+        float multiplier = spatial != null
+            ? spatial.GetDamageMultiplier(owner, target)
+            : 1f;
+        owner.FrameRaiseImpact(
+            new CombatImpact(
+                owner,
+                target,
+                CombatHitResult.Missed,
+                currentGlobalFrame /
+                (float)settings.FramesPerSecond,
+                orientation,
+                multiplier,
+                0f
+            )
+        );
     }
 
     private void InterruptCurrentAction(CombatFrameOutcome outcome)

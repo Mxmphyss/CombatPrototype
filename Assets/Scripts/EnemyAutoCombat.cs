@@ -21,6 +21,10 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     [SerializeField] private float pulseStrength = 0.035f;
     [Min(1f)]
     [SerializeField] private float pulseSpeed = 18f;
+    [Range(0f, 0.35f)]
+    [SerializeField] private float telegraphScaleStrength = 0.14f;
+    [Min(1f)]
+    [SerializeField] private float telegraphPulseSpeed = 10f;
 
     private FighterCombat enemy;
     private FighterCombat player;
@@ -43,10 +47,34 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     private RelativeOrientation compensationOrientation;
     private FighterCombat compensationAdvantage;
     private DodgeDirection compensationDirection;
+    private CombatActionId telegraphedAttack =
+        CombatActionId.None;
+    private int telegraphDueFrame = -1;
 
     public event Action<bool> OnAIEnabledChanged;
 
     public bool EnemyAIEnabled => enemyAIEnabled;
+    public bool IsAttackTelegraphing =>
+        telegraphedAttack != CombatActionId.None &&
+        telegraphDueFrame >= 0;
+    public CombatActionId TelegraphedAttack => telegraphedAttack;
+    public int AttackTelegraphDurationFrames =>
+        frameClock != null
+            ? Mathf.Max(
+                1,
+                Mathf.RoundToInt(
+                    telegraphDuration *
+                    frameClock.FramesPerSecond
+                )
+            )
+            : 0;
+    public int AttackTelegraphRemainingFrames =>
+        IsAttackTelegraphing && frameClock != null
+            ? Mathf.Max(
+                0,
+                telegraphDueFrame - frameClock.CurrentFrame
+            )
+            : 0;
 
     public void Initialize(
         FighterCombat enemyCombat,
@@ -121,6 +149,7 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         routineGeneration++;
         UnsubscribeFrameClock();
         compensationDueFrame = -1;
+        CancelFrameAttackTelegraph();
 
         if (combatRoutine != null)
         {
@@ -399,6 +428,9 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         if (!enemyAIEnabled || !CanContinue())
             return;
 
+        if (AdvanceFrameAttackTelegraph(globalFrame))
+            return;
+
         if (TryRunFrameCompensation(globalFrame))
             return;
 
@@ -426,24 +458,139 @@ public sealed class EnemyAutoCombat : MonoBehaviour
             return;
         }
 
-        int roll = UnityEngine.Random.Range(0, 100);
-        CombatActionResult result = roll switch
+        BeginFrameAttackTelegraph(
+            SelectAffordableAttack(),
+            globalFrame
+        );
+    }
+
+    private void BeginFrameAttackTelegraph(
+        CombatActionId attack,
+        int globalFrame)
+    {
+        if (!CombatActionRunner.IsAttack(attack) ||
+            frameClock == null)
         {
-            < 55 => enemy.LightAttack(),
-            < 85 => enemy.MediumAttack(),
-            _ => enemy.HeavyAttack()
-        };
+            ScheduleNextDecision(globalFrame);
+            return;
+        }
+
+        int durationFrames = AttackTelegraphDurationFrames;
+        telegraphedAttack = attack;
+        telegraphDueFrame = globalFrame + durationFrames;
+        string label = AttackLabel(attack);
+        hud.SetEnemyStatus($"Preparation {label}");
+        hud.ShowMessage(
+            $"Attaque {label} imminente",
+            TelegraphColor(attack),
+            telegraphDuration
+        );
+    }
+
+    private bool AdvanceFrameAttackTelegraph(int globalFrame)
+    {
+        if (!IsAttackTelegraphing)
+            return false;
+
+        if (enemy.IsBusy)
+        {
+            CancelFrameAttackTelegraph();
+            ScheduleNextDecision(globalFrame);
+            return true;
+        }
+
+        if (globalFrame < telegraphDueFrame)
+            return true;
+
+        CombatActionId attack = telegraphedAttack;
+        CancelFrameAttackTelegraph(false);
+        CombatActionResult result = ExecuteAttack(attack);
         if (result == CombatActionResult.Started)
         {
-            hud.SetEnemyStatus("Attaque");
+            string label = AttackLabel(attack);
+            hud.SetEnemyStatus($"Attaque {label}");
             hud.ShowMessage(
-                "Attaque ennemie",
-                new Color(0.94f, 0.42f, 0.30f),
+                $"Attaque {label}",
+                TelegraphColor(attack),
                 0.35f
             );
         }
+        else if (result == CombatActionResult.NotEnoughStamina)
+        {
+            enemy.StartCharge();
+            hud.SetEnemyStatus("Recharge");
+        }
 
         ScheduleNextDecision(globalFrame);
+        return true;
+    }
+
+    private void CancelFrameAttackTelegraph(bool clearStatus = true)
+    {
+        telegraphedAttack = CombatActionId.None;
+        telegraphDueFrame = -1;
+        RestoreScale();
+        if (clearStatus && hud != null)
+            hud.SetEnemyStatus(string.Empty);
+    }
+
+    private CombatActionId SelectAffordableAttack()
+    {
+        int roll = UnityEngine.Random.Range(0, 100);
+        CombatActionId selected = roll switch
+        {
+            < 55 => CombatActionId.AttackA,
+            < 85 => CombatActionId.AttackB,
+            _ => CombatActionId.AttackC
+        };
+
+        if (CanAffordAttack(selected))
+            return selected;
+        if (CanAffordAttack(CombatActionId.AttackB))
+            return CombatActionId.AttackB;
+        return CombatActionId.AttackA;
+    }
+
+    private bool CanAffordAttack(CombatActionId attack)
+    {
+        CombatActionDefinition definition =
+            enemy.FrameRunner?.GetDefinition(attack);
+        float cost = definition != null
+            ? definition.StaminaCost
+            : enemy.LightAttackStaminaCost;
+        return enemy.Stats.CurrentStamina + Mathf.Epsilon >= cost;
+    }
+
+    private CombatActionResult ExecuteAttack(CombatActionId attack)
+    {
+        return attack switch
+        {
+            CombatActionId.AttackB => enemy.MediumAttack(),
+            CombatActionId.AttackC => enemy.HeavyAttack(),
+            _ => enemy.LightAttack()
+        };
+    }
+
+    private static string AttackLabel(CombatActionId attack)
+    {
+        return attack switch
+        {
+            CombatActionId.AttackB => "B",
+            CombatActionId.AttackC => "C",
+            _ => "A"
+        };
+    }
+
+    private static Color TelegraphColor(CombatActionId attack)
+    {
+        return attack switch
+        {
+            CombatActionId.AttackB =>
+                new Color(1f, 0.42f, 0.18f),
+            CombatActionId.AttackC =>
+                new Color(0.95f, 0.2f, 0.35f),
+            _ => new Color(1f, 0.62f, 0.2f)
+        };
     }
 
     private bool TryRunFrameCompensation(int globalFrame)
@@ -510,6 +657,26 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     {
         if (enemy == null)
             return;
+
+        if (IsAttackTelegraphing)
+        {
+            float wave =
+                0.5f +
+                0.5f *
+                Mathf.Sin(
+                    Time.unscaledTime * telegraphPulseSpeed
+                );
+            float strength = wave * telegraphScaleStrength;
+            transform.localScale = Vector3.Scale(
+                normalScale,
+                new Vector3(
+                    1f - strength * 0.35f,
+                    1f + strength,
+                    1f - strength * 0.35f
+                )
+            );
+            return;
+        }
 
         if (enemy.CurrentState ==
             FighterCombatState.AttackStartup)

@@ -23,6 +23,7 @@ public static class V07PlayModeValidation
     private static FighterCombat enemy;
     private static FighterStats playerStats;
     private static FighterStats enemyStats;
+    private static EnemyAutoCombat enemyAI;
 
     static V07PlayModeValidation()
     {
@@ -72,9 +73,10 @@ public static class V07PlayModeValidation
         {
             Debug.Log(
                 "V07PlayModeValidation: deterministic attacks, " +
-                "whiff, trade, buffer clearing, guard, parry, " +
-                "guard break, dodges, permutation invulnerability, " +
-                "flank timer, infinite stamina and replay reset passed."
+                "enemy telegraph, whiff feedback, trade, buffer " +
+                "clearing, guard, parry, guard break, dodges, " +
+                "permutation invulnerability, flank timer, infinite " +
+                "stamina and replay reset passed."
             );
             EditorApplication.Exit(0);
         }
@@ -144,10 +146,10 @@ public static class V07PlayModeValidation
         clock = frameSystem != null ? frameSystem.Clock : null;
         playerStats = player != null ? player.Stats : null;
         enemyStats = enemy != null ? enemy.Stats : null;
-        EnemyAutoCombat ai =
+        enemyAI ??=
             UnityEngine.Object.FindFirstObjectByType<
                 EnemyAutoCombat>();
-        ai?.SetAIEnabled(false);
+        enemyAI?.SetAIEnabled(false);
 
         return frameSystem != null &&
                clock != null &&
@@ -164,6 +166,7 @@ public static class V07PlayModeValidation
     {
         ValidateAttackAndHitstop();
         ValidateAttackBAndC();
+        ValidateEnemyAttackTelegraph();
         ValidateOffAxisWhiff();
         ValidateTrade();
         ValidateBufferExpiry();
@@ -218,10 +221,25 @@ public static class V07PlayModeValidation
     private static void ValidateOffAxisWhiff()
     {
         ResetScenario();
+        CombatHitResult? feedbackResult = null;
+        void CaptureFeedback(CombatImpact impact)
+        {
+            if (impact.Attacker == player)
+                feedbackResult = impact.Result;
+        }
+
+        player.OnAttackResolved += CaptureFeedback;
         player.transform.rotation =
             Quaternion.Euler(0f, 180f, 0f);
-        RequireStarted(player.LightAttack(), "Off-axis attack");
-        Advance(40);
+        try
+        {
+            RequireStarted(player.LightAttack(), "Off-axis attack");
+            Advance(40);
+        }
+        finally
+        {
+            player.OnAttackResolved -= CaptureFeedback;
+        }
         RequireNear(
             enemyStats.CurrentHealth,
             100f,
@@ -232,6 +250,69 @@ public static class V07PlayModeValidation
             CombatFrameOutcome.Whiff,
             "Off-axis whiff outcome"
         );
+        RequireEqual(
+            feedbackResult,
+            (CombatHitResult?)CombatHitResult.Missed,
+            "Off-axis whiff feedback"
+        );
+    }
+
+    private static void ValidateEnemyAttackTelegraph()
+    {
+        ResetScenario();
+        Require(
+            enemyAI != null,
+            "Enemy AI was not available for telegraph validation."
+        );
+        enemyAI.SetAIEnabled(true);
+
+        int searchLimit = 240;
+        while (!enemyAI.IsAttackTelegraphing &&
+               searchLimit-- > 0)
+        {
+            Advance(1);
+        }
+
+        Require(
+            enemyAI.IsAttackTelegraphing,
+            "Enemy AI did not announce its attack."
+        );
+        Require(
+            CombatActionRunner.IsAttack(
+                enemyAI.TelegraphedAttack
+            ),
+            "Enemy telegraph did not reserve an attack."
+        );
+        int remaining =
+            enemyAI.AttackTelegraphRemainingFrames;
+        RequireEqual(
+            remaining,
+            enemyAI.AttackTelegraphDurationFrames,
+            "Enemy telegraph duration"
+        );
+        RequireEqual(
+            enemy.FrameRunner.CurrentActionId,
+            CombatActionId.None,
+            "Enemy attacked before the telegraph ended"
+        );
+
+        if (remaining > 1)
+            Advance(remaining - 1);
+        RequireEqual(
+            enemy.FrameRunner.CurrentActionId,
+            CombatActionId.None,
+            "Enemy attacked during the telegraph"
+        );
+        Advance(2);
+        Require(
+            CombatActionRunner.IsAttack(
+                enemy.FrameRunner.CurrentActionId
+            ),
+            "Enemy attack did not start after the telegraph."
+        );
+
+        enemyAI.SetAIEnabled(false);
+        ResetScenario();
     }
 
     private static void ValidateAttackBAndC()
