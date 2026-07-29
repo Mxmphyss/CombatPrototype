@@ -1,0 +1,664 @@
+using System;
+using System.Linq;
+using UnityEditor;
+using UnityEditor.SceneManagement;
+using UnityEngine;
+
+[InitializeOnLoad]
+public static class V07PlayModeValidation
+{
+    private const string ActiveKey =
+        "CombatPrototype.V07PlayMode.Active";
+    private const string ResultKey =
+        "CombatPrototype.V07PlayMode.Result";
+    private const string ScenePath =
+        "Assets/Scenes/CombatArena.unity";
+    private const float Tolerance = 0.01f;
+
+    private static double startedAt;
+    private static CombatFrameSystem frameSystem;
+    private static CombatFrameClock clock;
+    private static CombatSpatialController spatial;
+    private static FighterCombat player;
+    private static FighterCombat enemy;
+    private static FighterStats playerStats;
+    private static FighterStats enemyStats;
+
+    static V07PlayModeValidation()
+    {
+        EditorApplication.playModeStateChanged -=
+            HandlePlayModeStateChanged;
+        EditorApplication.playModeStateChanged +=
+            HandlePlayModeStateChanged;
+        EditorApplication.update -= Tick;
+        EditorApplication.update += Tick;
+    }
+
+    public static void Run()
+    {
+        if (EditorApplication.isPlayingOrWillChangePlaymode)
+        {
+            throw new InvalidOperationException(
+                "V07 PlayMode validation requires Edit Mode."
+            );
+        }
+
+        SessionState.SetBool(ActiveKey, true);
+        SessionState.SetInt(ResultKey, 0);
+        startedAt = EditorApplication.timeSinceStartup;
+        EditorSceneManager.OpenScene(ScenePath, OpenSceneMode.Single);
+        EditorApplication.EnterPlaymode();
+    }
+
+    private static void HandlePlayModeStateChanged(
+        PlayModeStateChange state)
+    {
+        if (!SessionState.GetBool(ActiveKey, false))
+            return;
+
+        if (state == PlayModeStateChange.EnteredPlayMode)
+        {
+            startedAt = EditorApplication.timeSinceStartup;
+            return;
+        }
+
+        if (state != PlayModeStateChange.EnteredEditMode)
+            return;
+
+        int result = SessionState.GetInt(ResultKey, -1);
+        SessionState.EraseBool(ActiveKey);
+        SessionState.EraseInt(ResultKey);
+        if (result == 1)
+        {
+            Debug.Log(
+                "V07PlayModeValidation: deterministic attacks, " +
+                "whiff, trade, buffer clearing, guard, parry, " +
+                "guard break, dodges, permutation invulnerability, " +
+                "flank timer, infinite stamina and replay reset passed."
+            );
+            EditorApplication.Exit(0);
+        }
+        else
+        {
+            EditorApplication.Exit(1);
+        }
+    }
+
+    private static void Tick()
+    {
+        if (!SessionState.GetBool(ActiveKey, false) ||
+            !EditorApplication.isPlaying)
+        {
+            return;
+        }
+
+        try
+        {
+            if (!TryResolveRuntime())
+            {
+                if (EditorApplication.timeSinceStartup - startedAt > 25d)
+                {
+                    throw new InvalidOperationException(
+                        "CombatArena deterministic runtime did not initialize."
+                    );
+                }
+                return;
+            }
+
+            RunValidation();
+            SessionState.SetInt(ResultKey, 1);
+            EditorApplication.ExitPlaymode();
+        }
+        catch (Exception exception)
+        {
+            Debug.LogError(
+                "V07PlayModeValidation failed: " + exception
+            );
+            SessionState.SetInt(ResultKey, -1);
+            EditorApplication.ExitPlaymode();
+        }
+    }
+
+    private static bool TryResolveRuntime()
+    {
+        frameSystem ??=
+            UnityEngine.Object.FindFirstObjectByType<
+                CombatFrameSystem>();
+        spatial ??=
+            UnityEngine.Object.FindFirstObjectByType<
+                CombatSpatialController>();
+        if (player == null || enemy == null)
+        {
+            FighterCombat[] fighters =
+                UnityEngine.Object.FindObjectsByType<FighterCombat>(
+                    FindObjectsSortMode.None
+                );
+            player = fighters.FirstOrDefault(
+                fighter => fighter.IsPlayerControlled
+            );
+            enemy = fighters.FirstOrDefault(
+                fighter => !fighter.IsPlayerControlled
+            );
+        }
+
+        clock = frameSystem != null ? frameSystem.Clock : null;
+        playerStats = player != null ? player.Stats : null;
+        enemyStats = enemy != null ? enemy.Stats : null;
+        EnemyAutoCombat ai =
+            UnityEngine.Object.FindFirstObjectByType<
+                EnemyAutoCombat>();
+        ai?.SetAIEnabled(false);
+
+        return frameSystem != null &&
+               clock != null &&
+               spatial != null &&
+               player != null &&
+               enemy != null &&
+               player.FrameRunner != null &&
+               enemy.FrameRunner != null &&
+               playerStats != null &&
+               enemyStats != null;
+    }
+
+    private static void RunValidation()
+    {
+        ValidateAttackAndHitstop();
+        ValidateAttackBAndC();
+        ValidateOffAxisWhiff();
+        ValidateTrade();
+        ValidateBufferExpiry();
+        ValidateParry();
+        ValidateHeldGuardAndGuardBreak();
+        ValidateBlockClearsBuffer();
+        ValidateInterruptedDodge();
+        ValidateDodgeWindows();
+        ValidatePermutation();
+        ValidatePermutationInvulnerability();
+        ValidateFlankTimer();
+        ValidateInfiniteStamina();
+        ValidateReplayReset();
+    }
+
+    private static void ValidateAttackAndHitstop()
+    {
+        ResetScenario();
+        RequireStarted(player.LightAttack(), "Attack A");
+        Advance(1);
+        RequireNear(
+            playerStats.CurrentStamina,
+            90f,
+            "Attack A stamina cost"
+        );
+        Advance(7);
+        RequireNear(
+            enemyStats.CurrentHealth,
+            80f,
+            "Attack A damage"
+        );
+        RequireEqual(
+            player.FrameRunner.LastOutcome,
+            CombatFrameOutcome.Hit,
+            "Attack A outcome"
+        );
+        int frozenLocalFrame =
+            player.FrameRunner.LocalActionFrame;
+        Advance(3);
+        RequireEqual(
+            player.FrameRunner.LocalActionFrame,
+            frozenLocalFrame,
+            "Hitstop froze local action frame"
+        );
+        RequireEqual(
+            player.FrameRunner.HitstopRemaining,
+            0,
+            "Hitstop duration"
+        );
+    }
+
+    private static void ValidateOffAxisWhiff()
+    {
+        ResetScenario();
+        player.transform.rotation =
+            Quaternion.Euler(0f, 180f, 0f);
+        RequireStarted(player.LightAttack(), "Off-axis attack");
+        Advance(40);
+        RequireNear(
+            enemyStats.CurrentHealth,
+            100f,
+            "Off-axis whiff damage"
+        );
+        RequireEqual(
+            player.FrameRunner.LastOutcome,
+            CombatFrameOutcome.Whiff,
+            "Off-axis whiff outcome"
+        );
+    }
+
+    private static void ValidateAttackBAndC()
+    {
+        ResetScenario();
+        RequireStarted(player.MediumAttack(), "Attack B");
+        Advance(12);
+        RequireNear(
+            enemyStats.CurrentHealth,
+            70f,
+            "Attack B damage"
+        );
+        RequireNear(
+            playerStats.CurrentStamina,
+            82f,
+            "Attack B stamina cost"
+        );
+
+        ResetScenario();
+        RequireStarted(player.HeavyAttack(), "Attack C");
+        Advance(19);
+        RequireNear(
+            enemyStats.CurrentHealth,
+            55f,
+            "Attack C damage"
+        );
+        RequireNear(
+            playerStats.CurrentStamina,
+            70f,
+            "Attack C stamina cost"
+        );
+    }
+
+    private static void ValidateTrade()
+    {
+        ResetScenario();
+        RequireStarted(player.LightAttack(), "Player trade attack");
+        RequireStarted(enemy.LightAttack(), "Enemy trade attack");
+        Advance(8);
+        RequireNear(playerStats.CurrentHealth, 80f, "Player trade damage");
+        RequireNear(enemyStats.CurrentHealth, 80f, "Enemy trade damage");
+        RequireEqual(
+            player.FrameRunner.LastOutcome,
+            CombatFrameOutcome.Trade,
+            "Player trade outcome"
+        );
+        RequireEqual(
+            enemy.FrameRunner.LastOutcome,
+            CombatFrameOutcome.Trade,
+            "Enemy trade outcome"
+        );
+    }
+
+    private static void ValidateBufferExpiry()
+    {
+        ResetScenario();
+        RequireStarted(player.HeavyAttack(), "Buffered source attack");
+        Advance(1);
+        RequireStarted(player.LightAttack(), "Buffered replacement");
+        RequireEqual(
+            player.FrameRunner.BufferedCommand,
+            CombatActionId.AttackA,
+            "Buffered action"
+        );
+        Advance(6);
+        RequireEqual(
+            player.FrameRunner.BufferedCommand,
+            CombatActionId.None,
+            "Expired buffer was cleared"
+        );
+        RequireEqual(
+            player.FrameRunner.LastOutcome,
+            CombatFrameOutcome.Expired,
+            "Buffer expiry outcome"
+        );
+    }
+
+    private static void ValidateParry()
+    {
+        ResetScenario();
+        RequireStarted(enemy.LightAttack(), "Parry source attack");
+        Advance(6);
+        RequireStarted(player.StartDefense(), "Parry input");
+        Advance(2);
+        RequireNear(
+            playerStats.CurrentHealth,
+            100f,
+            "Parry prevented damage"
+        );
+        RequireNear(
+            playerStats.CurrentStamina,
+            95f,
+            "Parry cost and refund"
+        );
+        Require(
+            player.FrameRunner.IsRiposteWindowActive,
+            "Parry did not open the riposte window."
+        );
+        RequireEqual(
+            player.FrameRunner.RiposteRemaining,
+            30,
+            "Riposte window length"
+        );
+    }
+
+    private static void ValidateHeldGuardAndGuardBreak()
+    {
+        ResetScenario();
+        RequireStarted(player.StartHeldGuard(), "Held guard");
+        Advance(1);
+        RequireNear(
+            playerStats.CurrentStamina,
+            100f,
+            "Held guard passive cost"
+        );
+        RequireStarted(enemy.LightAttack(), "Blocked attack");
+        Advance(8);
+        RequireNear(
+            playerStats.CurrentStamina,
+            85f,
+            "Blocked impact stamina cost"
+        );
+        RequireEqual(
+            player.FrameRunner.BlockstunRemaining,
+            9,
+            "Attack A blockstun"
+        );
+
+        ResetScenario();
+        playerStats.SetStamina(15f);
+        RequireStarted(player.StartHeldGuard(), "Guard-break guard");
+        Advance(1);
+        RequireStarted(enemy.LightAttack(), "Guard-break attack");
+        Advance(8);
+        RequireEqual(
+            player.FrameRunner.GuardBreakRemaining,
+            240,
+            "Guard-break duration"
+        );
+        Advance(243);
+        RequireEqual(
+            player.FrameRunner.GuardBreakRemaining,
+            0,
+            "Guard-break completion"
+        );
+        RequireNear(
+            playerStats.CurrentStamina,
+            15f,
+            "Guard-break stamina recovery"
+        );
+    }
+
+    private static void ValidateInterruptedDodge()
+    {
+        ResetScenario();
+        RequireStarted(enemy.LightAttack(), "Dodge interruption attack");
+        Advance(6);
+        Vector3 startPosition = player.transform.position;
+        RequireStarted(player.DodgeLeft(), "Interrupted dodge");
+        Advance(2);
+        RequireNear(
+            playerStats.CurrentHealth,
+            80f,
+            "Pre-invulnerability dodge damage"
+        );
+        RequireEqual(
+            player.FrameRunner.LastOutcome,
+            CombatFrameOutcome.InterruptedDodge,
+            "Interrupted dodge outcome"
+        );
+        Require(
+            !spatial.HasPendingDodge,
+            "Interrupted dodge transaction survived."
+        );
+        Require(
+            Vector3.Distance(
+                startPosition,
+                player.transform.position
+            ) > 0.001f,
+            "Interrupted dodge rolled back to its start."
+        );
+    }
+
+    private static void ValidateBlockClearsBuffer()
+    {
+        ResetScenario();
+        RequireStarted(player.StartHeldGuard(), "Buffered block guard");
+        RequireStarted(enemy.LightAttack(), "Buffered block attack");
+        Advance(4);
+        RequireStarted(player.LightAttack(), "Command buffered before block");
+        RequireEqual(
+            player.FrameRunner.BufferedCommand,
+            CombatActionId.AttackA,
+            "Pre-block buffered action"
+        );
+        Advance(4);
+        RequireEqual(
+            player.FrameRunner.BufferedCommand,
+            CombatActionId.None,
+            "Blockstun cleared the command buffer"
+        );
+    }
+
+    private static void ValidateDodgeWindows()
+    {
+        ResetScenario();
+        RequireStarted(player.DodgeLeft(), "Invulnerable dodge");
+        RequireStarted(enemy.LightAttack(), "Dodge source attack");
+        Advance(8);
+        RequireNear(
+            playerStats.CurrentHealth,
+            100f,
+            "Invulnerable dodge prevented damage"
+        );
+        RequireEqual(
+            player.FrameRunner.LastOutcome,
+            CombatFrameOutcome.Dodge,
+            "Invulnerable dodge outcome"
+        );
+
+        ResetScenario();
+        RequireStarted(player.DodgeForward(), "Perfect dodge");
+        Advance(2);
+        RequireStarted(enemy.LightAttack(), "Perfect-dodge attack");
+        Advance(8);
+        RequireNear(
+            playerStats.CurrentHealth,
+            100f,
+            "Perfect dodge prevented damage"
+        );
+        RequireEqual(
+            player.FrameRunner.LastOutcome,
+            CombatFrameOutcome.PerfectDodge,
+            "Perfect dodge outcome"
+        );
+        Require(
+            enemy.FrameRunner.HitstunRemaining > 0,
+            "Perfect dodge reward did not stun the attacker."
+        );
+    }
+
+    private static void ValidatePermutation()
+    {
+        ResetScenario();
+        playerStats.SetStamina(50f);
+        RelativeOrientation orientationBefore =
+            spatial.CurrentOrientation;
+        RequireStarted(
+            player.TryPermutation(70001),
+            "Exact-cost permutation"
+        );
+        Advance(4);
+        RequireNear(
+            playerStats.CurrentStamina,
+            0f,
+            "Permutation exact cost"
+        );
+        RequireEqual(
+            spatial.CurrentDistance,
+            DistanceLevel.LongRange,
+            "Permutation distance cycle"
+        );
+        RequireEqual(
+            spatial.CurrentOrientation,
+            orientationBefore,
+            "Permutation orientation preservation"
+        );
+        RequireEqual(
+            player.FrameRunner.GuardBreakRemaining,
+            0,
+            "Permutation zero stamina is not guard break"
+        );
+    }
+
+    private static void ValidatePermutationInvulnerability()
+    {
+        ResetScenario();
+        RequireStarted(
+            enemy.LightAttack(),
+            "Permutation invulnerability source attack"
+        );
+        Advance(5);
+        playerStats.SetStamina(50f);
+        RequireStarted(
+            player.TryPermutation(70002),
+            "Permutation invulnerability"
+        );
+        Advance(3);
+        RequireNear(
+            playerStats.CurrentHealth,
+            100f,
+            "Permutation invulnerability prevented damage"
+        );
+        RequireEqual(
+            player.FrameRunner.LastOutcome,
+            CombatFrameOutcome.Dodge,
+            "Permutation invulnerability outcome"
+        );
+    }
+
+    private static void ValidateFlankTimer()
+    {
+        ResetScenario();
+        RequireStarted(player.DodgeLeft(), "Flank dodge");
+        Advance(26);
+        Require(
+            spatial.CurrentOrientation is
+                RelativeOrientation.LeftFlank or
+                RelativeOrientation.RightFlank,
+            "Lateral dodge did not create a flank."
+        );
+        int remaining = Mathf.Max(
+            0,
+            180 - spatial.FlankElapsedFrames
+        );
+        if (remaining > 1)
+            Advance(remaining - 1);
+        Require(
+            spatial.CurrentOrientation != RelativeOrientation.Face,
+            "Flank auto-face occurred before frame 180."
+        );
+        Advance(1);
+        RequireEqual(
+            spatial.CurrentOrientation,
+            RelativeOrientation.Face,
+            "Flank auto-face at frame 180"
+        );
+    }
+
+    private static void ValidateInfiniteStamina()
+    {
+        ResetScenario();
+        playerStats.SetInfiniteStamina(true);
+        RequireStarted(player.HeavyAttack(), "Infinite-stamina attack");
+        Advance(1);
+        RequireNear(
+            playerStats.CurrentStamina,
+            100f,
+            "Infinite stamina remains full"
+        );
+        playerStats.SetInfiniteStamina(false);
+    }
+
+    private static void ValidateReplayReset()
+    {
+        ResetScenario();
+        RequireStarted(player.HeavyAttack(), "Reset source attack");
+        Advance(1);
+        RequireStarted(player.LightAttack(), "Reset buffered attack");
+        frameSystem.ResetSystem();
+        clock.StopClock();
+        spatial.ResetDuel();
+        RequireEqual(clock.CurrentFrame, 0, "Reset clock");
+        RequireEqual(
+            player.FrameRunner.CurrentActionId,
+            CombatActionId.None,
+            "Reset current action"
+        );
+        RequireEqual(
+            player.FrameRunner.BufferedCommand,
+            CombatActionId.None,
+            "Reset buffer"
+        );
+        Require(
+            !spatial.HasPendingDodge &&
+            spatial.CurrentDistance == DistanceLevel.MidRange &&
+            spatial.CurrentOrientation == RelativeOrientation.Face,
+            "Reset spatial state"
+        );
+    }
+
+    private static void ResetScenario()
+    {
+        clock.StopClock();
+        playerStats.SetInfiniteStamina(false);
+        enemyStats.SetInfiniteStamina(false);
+        playerStats.ResetStats();
+        enemyStats.ResetStats();
+        player.ResetCombatState();
+        enemy.ResetCombatState();
+        spatial.ResetDuel();
+        spatial.SetCombatEnabled(true);
+        frameSystem.ResetSystem();
+        clock.StopClock();
+    }
+
+    private static void Advance(int frames)
+    {
+        frameSystem.AdvanceFramesForTests(frames);
+    }
+
+    private static void RequireStarted(
+        CombatActionResult result,
+        string label)
+    {
+        RequireEqual(
+            result,
+            CombatActionResult.Started,
+            label
+        );
+    }
+
+    private static void RequireNear(
+        float actual,
+        float expected,
+        string label)
+    {
+        Require(
+            Mathf.Abs(actual - expected) <= Tolerance,
+            $"{label}: expected {expected}, got {actual}."
+        );
+    }
+
+    private static void RequireEqual<T>(
+        T actual,
+        T expected,
+        string label)
+    {
+        Require(
+            Equals(actual, expected),
+            $"{label}: expected {expected}, got {actual}."
+        );
+    }
+
+    private static void Require(bool condition, string message)
+    {
+        if (!condition)
+            throw new InvalidOperationException(message);
+    }
+}

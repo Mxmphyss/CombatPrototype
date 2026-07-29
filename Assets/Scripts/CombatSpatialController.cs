@@ -47,7 +47,8 @@ public enum CombatSpatialChangeReason
     TransientStateCancelled = 9,
     DuelReset = 10,
     SignificantAction = 11,
-    CombatEnabledChanged = 12
+    CombatEnabledChanged = 12,
+    DodgeInterrupted = 13
 }
 
 [Serializable]
@@ -503,6 +504,11 @@ public sealed class CombatSpatialController : MonoBehaviour
     private FighterCombat advantageFighter;
     private DodgeDirection? flankDodgeDirection;
     private float flankElapsed;
+    private bool frameDriven;
+    private int frameRate = 60;
+    private int flankAutoFaceFrames = 180;
+    private int flankElapsedFrames;
+    private bool pendingAutoFace;
     private bool hasPendingDodge;
     private SpatialDodgeTransaction pendingDodge;
     private long nextDodgeId = 1;
@@ -548,6 +554,8 @@ public sealed class CombatSpatialController : MonoBehaviour
         IsInitialized &&
         combatEnabled;
     public bool CanPermutePositions => CanApplyPermutation;
+    public int FlankElapsedFrames => flankElapsedFrames;
+    public bool PendingAutoFace => pendingAutoFace;
 
     public bool IsCurrentDistanceAllowed(
         DistanceLevel minimum,
@@ -610,6 +618,9 @@ public sealed class CombatSpatialController : MonoBehaviour
 
     private void Update()
     {
+        if (frameDriven)
+            return;
+
         if (!IsInitialized ||
             !combatEnabled ||
             hasPendingDodge)
@@ -618,6 +629,36 @@ public sealed class CombatSpatialController : MonoBehaviour
         float deltaTime = Time.deltaTime;
         UpdateContinuousMovement(deltaTime);
         UpdateAutoFace(deltaTime);
+    }
+
+    public void SetFrameDriven(
+        bool enabled,
+        int framesPerSecond,
+        int autoFaceFrames)
+    {
+        frameDriven = enabled;
+        frameRate = Mathf.Max(1, framesPerSecond);
+        flankAutoFaceFrames = Mathf.Max(0, autoFaceFrames);
+        flankElapsedFrames = Mathf.Max(
+            0,
+            Mathf.RoundToInt(flankElapsed * frameRate)
+        );
+        pendingAutoFace = false;
+    }
+
+    public void TickFrame()
+    {
+        if (!frameDriven ||
+            !IsInitialized ||
+            !combatEnabled ||
+            hasPendingDodge)
+        {
+            return;
+        }
+
+        float fixedDelta = 1f / Mathf.Max(1, frameRate);
+        UpdateContinuousMovement(fixedDelta);
+        UpdateAutoFaceFrame();
     }
 
     public bool Initialize(
@@ -654,6 +695,8 @@ public sealed class CombatSpatialController : MonoBehaviour
         advantageFighter = null;
         flankDodgeDirection = null;
         flankElapsed = 0f;
+        flankElapsedFrames = 0;
+        pendingAutoFace = false;
         hasPendingDodge = false;
         pendingDodge = default;
         combatEnabled = true;
@@ -931,6 +974,8 @@ public sealed class CombatSpatialController : MonoBehaviour
             flankDodgeDirection = committed.Direction;
         }
         flankElapsed = 0f;
+        flankElapsedFrames = 0;
+        pendingAutoFace = false;
         hasPendingDodge = false;
         pendingDodge = default;
 
@@ -985,6 +1030,40 @@ public sealed class CombatSpatialController : MonoBehaviour
                CancelDodge(transaction.Id);
     }
 
+    public bool InterruptDodgeAtCurrentPose(
+        SpatialDodgeTransaction transaction)
+    {
+        if (!IsPendingTransaction(transaction.Id) ||
+            transaction.Epoch != dodgeEpoch)
+        {
+            return false;
+        }
+
+        SpatialDodgeTransaction interrupted = pendingDodge;
+        FighterCombat fighter = interrupted.Fighter;
+        if (fighter == firstFighter)
+            firstNeutralPose = ReadPose(firstFighter.transform);
+        else if (fighter == secondFighter)
+            secondNeutralPose = ReadPose(secondFighter.transform);
+
+        distanceLevel = ResolveDistanceLevel(
+            GetHorizontalSeparation()
+        );
+        hasPendingDodge = false;
+        pendingDodge = default;
+        flankElapsed = 0f;
+        flankElapsedFrames = 0;
+        pendingAutoFace = false;
+
+        Publish(
+            CombatSpatialChangeReason.DodgeInterrupted,
+            fighter,
+            interrupted.Id
+        );
+        OnDodgeCancelled?.Invoke(interrupted);
+        return true;
+    }
+
     internal bool ApplyPermutation(FighterCombat instigator)
     {
         if (!CanApplyPermutation || !Contains(instigator))
@@ -1007,6 +1086,8 @@ public sealed class CombatSpatialController : MonoBehaviour
         );
         distanceLevel = nextDistance;
         flankElapsed = 0f;
+        flankElapsedFrames = 0;
+        pendingAutoFace = false;
         ApplyNeutralPosesToTransforms();
 
         Publish(
@@ -1185,6 +1266,8 @@ public sealed class CombatSpatialController : MonoBehaviour
             }
 
             flankElapsed = 0f;
+            flankElapsedFrames = 0;
+            pendingAutoFace = false;
             ApplyNeutralPosesToTransforms();
         }
 
@@ -1276,6 +1359,8 @@ public sealed class CombatSpatialController : MonoBehaviour
         advantageFighter = null;
         flankDodgeDirection = null;
         flankElapsed = 0f;
+        flankElapsedFrames = 0;
+        pendingAutoFace = false;
         ApplyNeutralPosesToTransforms();
 
         Publish(
@@ -1402,25 +1487,61 @@ public sealed class CombatSpatialController : MonoBehaviour
         if (flankElapsed < settings.FlankAutoFaceDelay)
             return;
 
-        // The countdown belongs to the spatial flank state. Combat
-        // actions may continue, but the actual rotation waits for a
-        // neutral frame so it cannot overwrite an animation offset.
-        if (
-            hasPendingDodge ||
-            firstMovement != SpatialMovementType.None ||
-            secondMovement != SpatialMovementType.None ||
-            firstFighter.CurrentState != FighterCombatState.Idle ||
-            secondFighter.CurrentState != FighterCombatState.Idle)
+        if (!CanApplyAutoFaceNow())
+            return;
+
+        ApplyAutoFace();
+    }
+
+    private void UpdateAutoFaceFrame()
+    {
+        if (!settings.AutoFaceFlanks ||
+            !IsFlank(relativeOrientation))
         {
+            flankElapsedFrames = 0;
+            pendingAutoFace = false;
             return;
         }
 
+        if (!pendingAutoFace)
+        {
+            flankElapsedFrames++;
+            flankElapsed =
+                flankElapsedFrames /
+                (float)Mathf.Max(1, frameRate);
+            if (flankElapsedFrames < flankAutoFaceFrames)
+                return;
+
+            pendingAutoFace = true;
+        }
+
+        if (!CanApplyAutoFaceNow())
+            return;
+
+        ApplyAutoFace();
+    }
+
+    private bool CanApplyAutoFaceNow()
+    {
+        // The countdown belongs to the flank state. Rotation waits for
+        // the first safe logical frame and never cuts an active action.
+        return !hasPendingDodge &&
+               firstMovement == SpatialMovementType.None &&
+               secondMovement == SpatialMovementType.None &&
+               firstFighter.CurrentState == FighterCombatState.Idle &&
+               secondFighter.CurrentState == FighterCombatState.Idle;
+    }
+
+    private void ApplyAutoFace()
+    {
         RelativeOrientation previousOrientation =
             relativeOrientation;
         relativeOrientation = RelativeOrientation.Face;
         advantageFighter = null;
         flankDodgeDirection = null;
         flankElapsed = 0f;
+        flankElapsedFrames = 0;
+        pendingAutoFace = false;
         SetFaceRotations();
         ApplyNeutralPosesToTransforms();
 
@@ -1969,6 +2090,14 @@ public sealed class CombatSpatialController : MonoBehaviour
             !IsFlank(relativeOrientation))
         {
             return 0f;
+        }
+
+        if (frameDriven)
+        {
+            return Mathf.Max(
+                0,
+                flankAutoFaceFrames - flankElapsedFrames
+            ) / (float)Mathf.Max(1, frameRate);
         }
 
         return Mathf.Max(

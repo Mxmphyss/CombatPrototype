@@ -28,6 +28,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     private Text distanceToggleLabel;
     private Text dodgeTimingLabel;
     private Text cameraStateLabel;
+    private CombatFrameDebugDisplay frameDebugDisplay;
 
     public static PrototypeDebugUI Create(
         Transform parent,
@@ -37,6 +38,8 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         CombatSpatialController spatialAuthority = null,
         CombatCameraController cameraAuthority = null,
         CombatDistanceDebugVisualizer distanceDebug = null,
+        CombatFrameSystem deterministicFrameSystem = null,
+        FighterStats enemyFighterStats = null,
         RectTransform enemyPanel = null)
     {
         GameObject panelObject =
@@ -79,7 +82,9 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             gestureGrid,
             spatialAuthority,
             cameraAuthority,
-            distanceDebug
+            distanceDebug,
+            deterministicFrameSystem,
+            enemyFighterStats
         );
         return debugUI;
     }
@@ -90,7 +95,9 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         CombatGestureGrid gestureGrid,
         CombatSpatialController spatialAuthority,
         CombatCameraController cameraAuthority,
-        CombatDistanceDebugVisualizer distanceDebug)
+        CombatDistanceDebugVisualizer distanceDebug,
+        CombatFrameSystem deterministicFrameSystem,
+        FighterStats enemyFighterStats)
     {
         enemyAI = enemyAutoCombat;
         playerStats = playerFighterStats;
@@ -112,6 +119,14 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         gestureDisplay =
             gameObject.AddComponent<GestureDebugDisplay>();
         gestureDisplay.Initialize(gestureGrid);
+        frameDebugDisplay =
+            gameObject.AddComponent<CombatFrameDebugDisplay>();
+        frameDebugDisplay.Initialize(
+            deterministicFrameSystem,
+            spatialController,
+            playerStats,
+            enemyFighterStats
+        );
 
         if (enemyAI != null)
         {
@@ -154,6 +169,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     public void ResetForReplay()
     {
         gestureDisplay?.Clear();
+        frameDebugDisplay?.ResetForReplay();
         RefreshAIToggle();
         cameraController?.ResetCameraView(true);
         RefreshDistanceToggle();

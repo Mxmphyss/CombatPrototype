@@ -13,6 +13,8 @@ public sealed class CombatManager : MonoBehaviour
     private CombatSpatialController spatialController;
     private CombatCameraController cameraController;
     private CombatDistanceDebugVisualizer distanceVisualizer;
+    private CombatFrameClock frameClock;
+    private CombatFrameSystem frameSystem;
     private bool combatEnded;
     private bool isResetting;
 
@@ -91,6 +93,16 @@ public sealed class CombatManager : MonoBehaviour
         playerCombat.SetSpatialController(spatialController);
         enemyCombat.SetSpatialController(spatialController);
 
+        frameClock = gameObject.AddComponent<CombatFrameClock>();
+        frameSystem = gameObject.AddComponent<CombatFrameSystem>();
+        frameSystem.Initialize(
+            frameClock,
+            playerCombat,
+            enemyCombat,
+            spatialController,
+            sharedRules
+        );
+
         hud = CombatHUD.Create(
             playerCombat,
             enemyCombat,
@@ -144,6 +156,8 @@ public sealed class CombatManager : MonoBehaviour
             spatialController,
             cameraController,
             distanceVisualizer,
+            frameSystem,
+            enemyStats,
             hud.EnemyPanel
         );
 
@@ -183,6 +197,7 @@ public sealed class CombatManager : MonoBehaviour
         enemyCombat.ResetCombatState();
         spatialController?.ResetDuel();
         spatialController?.SetCombatEnabled(true);
+        frameSystem?.ResetSystem();
 
         combatEnded = false;
         hud.HideEndState();
@@ -193,7 +208,8 @@ public sealed class CombatManager : MonoBehaviour
             enemyCombat,
             playerCombat,
             hud,
-            spatialController
+            spatialController,
+            frameSystem
         );
         prototypeDebugUI?.ResetForReplay();
         cameraController?.ResetCameraView(true);
@@ -211,6 +227,7 @@ public sealed class CombatManager : MonoBehaviour
         enemyCombat.ResetCombatState();
         spatialController?.ResetDuel();
         spatialController?.SetCombatEnabled(true);
+        frameSystem?.ResetSystem();
         hud.HideEndState();
         hud.SetGridEnabled(true);
         hud.RefreshAll();
@@ -218,7 +235,8 @@ public sealed class CombatManager : MonoBehaviour
             enemyCombat,
             playerCombat,
             hud,
-            spatialController
+            spatialController,
+            frameSystem
         );
         prototypeDebugUI?.ResetForReplay();
         cameraController?.ResetCameraView(true);
@@ -254,6 +272,8 @@ public sealed class CombatManager : MonoBehaviour
 
         if (spatialController != null)
             spatialController.SetCombatEnabled(false);
+        if (frameSystem != null)
+            frameSystem.SetCombatEnabled(false);
         if (playerCombat != null)
             playerCombat.SetCombatEnabled(false);
         if (enemyCombat != null)

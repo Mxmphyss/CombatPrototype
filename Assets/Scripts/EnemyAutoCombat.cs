@@ -26,6 +26,8 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     private FighterCombat player;
     private CombatHUD hud;
     private CombatSpatialController spatialController;
+    private CombatFrameSystem frameSystem;
+    private CombatFrameClock frameClock;
     private Coroutine combatRoutine;
     private Coroutine compensationRoutine;
     private Vector3 normalScale;
@@ -33,6 +35,14 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     private bool appliedAIEnabled = true;
     private int routineGeneration;
     private long nextPermutationToken;
+    private bool frameTickSubscribed;
+    private int nextDecisionFrame;
+    private int compensationDueFrame = -1;
+    private long compensationEpoch;
+    private int compensationRevision;
+    private RelativeOrientation compensationOrientation;
+    private FighterCombat compensationAdvantage;
+    private DodgeDirection compensationDirection;
 
     public event Action<bool> OnAIEnabledChanged;
 
@@ -42,7 +52,8 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         FighterCombat enemyCombat,
         FighterCombat playerCombat,
         CombatHUD combatHud,
-        CombatSpatialController spatialAuthority = null)
+        CombatSpatialController spatialAuthority = null,
+        CombatFrameSystem deterministicFrameSystem = null)
     {
         UnsubscribeSpatialEvents();
         StopAI();
@@ -51,6 +62,10 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         player = playerCombat;
         hud = combatHud;
         spatialController = spatialAuthority;
+        frameSystem = deterministicFrameSystem;
+        frameClock = frameSystem != null
+            ? frameSystem.Clock
+            : null;
         normalScale = transform.localScale;
         initialized = true;
         appliedAIEnabled = enemyAIEnabled;
@@ -63,6 +78,9 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     {
         if (appliedAIEnabled != enemyAIEnabled)
             ApplyAIEnabledState();
+
+        if (frameClock != null)
+            UpdateFrameDrivenVisuals();
     }
 
     private void OnDisable()
@@ -77,6 +95,16 @@ public sealed class EnemyAutoCombat : MonoBehaviour
 
     public void StartAI()
     {
+        if (frameClock != null)
+        {
+            if (!initialized || !enemyAIEnabled || !CanContinue())
+                return;
+
+            SubscribeFrameClock();
+            ScheduleNextDecision(frameClock.CurrentFrame);
+            return;
+        }
+
         if (!initialized ||
             !enemyAIEnabled ||
             combatRoutine != null ||
@@ -91,6 +119,8 @@ public sealed class EnemyAutoCombat : MonoBehaviour
     public void StopAI()
     {
         routineGeneration++;
+        UnsubscribeFrameClock();
+        compensationDueFrame = -1;
 
         if (combatRoutine != null)
         {
@@ -346,6 +376,161 @@ public sealed class EnemyAutoCombat : MonoBehaviour
         return true;
     }
 
+    private void SubscribeFrameClock()
+    {
+        if (frameTickSubscribed || frameClock == null)
+            return;
+
+        frameClock.OnCombatTick += HandleFrameTick;
+        frameTickSubscribed = true;
+    }
+
+    private void UnsubscribeFrameClock()
+    {
+        if (!frameTickSubscribed || frameClock == null)
+            return;
+
+        frameClock.OnCombatTick -= HandleFrameTick;
+        frameTickSubscribed = false;
+    }
+
+    private void HandleFrameTick(int globalFrame)
+    {
+        if (!enemyAIEnabled || !CanContinue())
+            return;
+
+        if (TryRunFrameCompensation(globalFrame))
+            return;
+
+        if (enemy.Stats.CurrentStamina + Mathf.Epsilon <
+            enemy.LightAttackStaminaCost)
+        {
+            if (!enemy.IsCharging && !enemy.IsBusy)
+                enemy.StartCharge();
+            hud.SetEnemyStatus("Recharge");
+            return;
+        }
+
+        if (enemy.IsCharging)
+        {
+            enemy.StopChargeInput();
+            ScheduleNextDecision(globalFrame);
+        }
+
+        if (enemy.IsBusy || globalFrame < nextDecisionFrame)
+            return;
+
+        if (TryUseConfiguredPermutation())
+        {
+            ScheduleNextDecision(globalFrame);
+            return;
+        }
+
+        int roll = UnityEngine.Random.Range(0, 100);
+        CombatActionResult result = roll switch
+        {
+            < 55 => enemy.LightAttack(),
+            < 85 => enemy.MediumAttack(),
+            _ => enemy.HeavyAttack()
+        };
+        if (result == CombatActionResult.Started)
+        {
+            hud.SetEnemyStatus("Attaque");
+            hud.ShowMessage(
+                "Attaque ennemie",
+                new Color(0.94f, 0.42f, 0.30f),
+                0.35f
+            );
+        }
+
+        ScheduleNextDecision(globalFrame);
+    }
+
+    private bool TryRunFrameCompensation(int globalFrame)
+    {
+        if (compensationDueFrame < 0 ||
+            globalFrame < compensationDueFrame)
+        {
+            return false;
+        }
+
+        compensationDueFrame = -1;
+        CombatSpatialSnapshot snapshot =
+            spatialController != null
+                ? spatialController.Snapshot
+                : default;
+        bool stillCurrent =
+            spatialController != null &&
+            snapshot.Epoch == compensationEpoch &&
+            snapshot.Revision == compensationRevision &&
+            snapshot.Orientation == compensationOrientation &&
+            snapshot.AdvantageFighter == compensationAdvantage;
+        if (!stillCurrent || enemy.IsBusy)
+            return false;
+
+        CombatActionResult result =
+            compensationDirection == DodgeDirection.Left
+                ? enemy.DodgeLeft()
+                : enemy.DodgeRight();
+        if (result != CombatActionResult.Started)
+            return false;
+
+        hud.SetEnemyStatus("Esquive");
+        return true;
+    }
+
+    private void ScheduleNextDecision(int currentFrame)
+    {
+        if (frameClock == null)
+            return;
+
+        int minimumFrames = Mathf.Max(
+            1,
+            Mathf.RoundToInt(
+                Mathf.Min(minimumDelay, maximumDelay) *
+                frameClock.FramesPerSecond
+            )
+        );
+        int maximumFrames = Mathf.Max(
+            minimumFrames,
+            Mathf.RoundToInt(
+                Mathf.Max(minimumDelay, maximumDelay) *
+                frameClock.FramesPerSecond
+            )
+        );
+        nextDecisionFrame =
+            currentFrame +
+            UnityEngine.Random.Range(
+                minimumFrames,
+                maximumFrames + 1
+            );
+    }
+
+    private void UpdateFrameDrivenVisuals()
+    {
+        if (enemy == null)
+            return;
+
+        if (enemy.CurrentState ==
+            FighterCombatState.AttackStartup)
+        {
+            float pulse =
+                1f +
+                Mathf.Sin(Time.time * pulseSpeed) *
+                pulseStrength;
+            transform.localScale = normalScale * pulse;
+            return;
+        }
+
+        RestoreScale();
+        if (hud != null &&
+            !enemy.IsBusy &&
+            !enemy.IsCharging)
+        {
+            hud.SetEnemyStatus(string.Empty);
+        }
+    }
+
     private void ApplyAIEnabledState()
     {
         bool changed =
@@ -410,6 +595,30 @@ public sealed class EnemyAutoCombat : MonoBehaviour
             UnityEngine.Random.value >
                 enemy.Rules.AiCompensationProbability)
         {
+            return;
+        }
+
+        if (frameClock != null)
+        {
+            compensationDirection = transaction.Direction;
+            compensationEpoch = snapshot.Epoch;
+            compensationRevision = snapshot.Revision;
+            compensationOrientation = snapshot.Orientation;
+            compensationAdvantage = snapshot.AdvantageFighter;
+            int minimumFrames = Mathf.RoundToInt(
+                enemy.Rules.AiCompensationMinDelay *
+                frameClock.FramesPerSecond
+            );
+            int maximumFrames = Mathf.RoundToInt(
+                enemy.Rules.AiCompensationMaxDelay *
+                frameClock.FramesPerSecond
+            );
+            compensationDueFrame =
+                frameClock.CurrentFrame +
+                UnityEngine.Random.Range(
+                    Mathf.Min(minimumFrames, maximumFrames),
+                    Mathf.Max(minimumFrames, maximumFrames) + 1
+                );
             return;
         }
 

@@ -55,9 +55,15 @@ public sealed class CombatGestureCommandRouter
             : 0.35f;
     public bool ShouldCancelInput =>
         fighter == null ||
-        fighter.CurrentState is
-            FighterCombatState.Stunned or
-            FighterCombatState.Dead;
+        fighter.CurrentState == FighterCombatState.Dead ||
+        (fighter.FrameRunner != null
+            ? fighter.FrameRunner.CurrentPhase is
+                CombatActionPhase.Hitstun or
+                CombatActionPhase.Blockstun or
+                CombatActionPhase.GuardBrokenStun or
+                CombatActionPhase.Dead
+            : fighter.CurrentState ==
+              FighterCombatState.Stunned);
 
     public CombatGestureCommandRouter(FighterCombat controlledFighter)
     {
@@ -74,8 +80,14 @@ public sealed class CombatGestureCommandRouter
 
         if (zone is >= 0 and <= 2)
         {
+            CombatActionResult attackResult = zone switch
+            {
+                0 => fighter.LightAttack(),
+                1 => fighter.MediumAttack(),
+                _ => fighter.HeavyAttack()
+            };
             return Action(
-                fighter.LightAttack(),
+                attackResult,
                 $"Attaque {(char)('A' + zone)}",
                 zone
             );
