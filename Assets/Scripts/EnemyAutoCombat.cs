@@ -475,6 +475,7 @@ public sealed class EnemyAutoCombat : MonoBehaviour
             return;
         }
 
+        compensationDueFrame = -1;
         int durationFrames = AttackTelegraphDurationFrames;
         telegraphedAttack = attack;
         telegraphDueFrame = globalFrame + durationFrames;
@@ -745,6 +746,7 @@ public sealed class EnemyAutoCombat : MonoBehaviour
             transaction.Fighter != player ||
             transaction.Direction is not DodgeDirection.Left and
                 not DodgeDirection.Right ||
+            IsAttackTelegraphing ||
             !enemy.Rules.AiCompensationEnabled)
         {
             return;

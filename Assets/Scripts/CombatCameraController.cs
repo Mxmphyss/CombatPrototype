@@ -26,6 +26,7 @@ public sealed class CombatCameraController : MonoBehaviour
     private Camera combatCamera;
     private FighterCombat player;
     private FighterCombat opponent;
+    private CombatSpatialController spatialAuthority;
     private Quaternion neutralCameraLocalRotation;
     private Vector3 neutralPlayerOffset;
     private Vector3 manualPanOffset;
@@ -58,6 +59,7 @@ public sealed class CombatCameraController : MonoBehaviour
         combatCamera = targetCamera;
         player = playerFighter;
         opponent = opponentFighter;
+        this.spatialAuthority = spatialAuthority;
 
         if (combatCamera == null || player == null)
         {
@@ -279,7 +281,7 @@ public sealed class CombatCameraController : MonoBehaviour
 
     private Vector3 CalculateTargetPosition()
     {
-        Vector3 playerPosition = GetNeutralPosition(player);
+        Vector3 playerPosition = GetFramingPosition(player);
         Quaternion duelRotation = CalculateDuelFrameRotation();
         return playerPosition +
             duelRotation *
@@ -331,11 +333,11 @@ public sealed class CombatCameraController : MonoBehaviour
             Quaternion.Inverse(cameraRotation);
         float playerFov = RequiredVerticalFov(
             inverseRotation *
-            (GetNeutralPosition(player) - cameraPosition)
+            (GetFramingPosition(player) - cameraPosition)
         );
         float opponentFov = RequiredVerticalFov(
             inverseRotation *
-            (GetNeutralPosition(opponent) - cameraPosition)
+            (GetFramingPosition(opponent) - cameraPosition)
         );
         return Mathf.Max(playerFov, opponentFov);
     }
@@ -368,10 +370,10 @@ public sealed class CombatCameraController : MonoBehaviour
             Quaternion.Inverse(cameraRotation);
         Vector3 playerLocal =
             inverseRotation *
-            (GetNeutralPosition(player) - cameraPosition);
+            (GetFramingPosition(player) - cameraPosition);
         Vector3 opponentLocal =
             inverseRotation *
-            (GetNeutralPosition(opponent) - cameraPosition);
+            (GetFramingPosition(opponent) - cameraPosition);
         float vertical = Mathf.Max(
             Mathf.Abs(playerLocal.y),
             Mathf.Abs(opponentLocal.y)
@@ -385,11 +387,21 @@ public sealed class CombatCameraController : MonoBehaviour
         return Mathf.Max(vertical, horizontal);
     }
 
-    private Vector3 GetNeutralPosition(FighterCombat fighter)
+    private Vector3 GetFramingPosition(FighterCombat fighter)
     {
-        return fighter != null
-            ? fighter.transform.position
-            : Vector3.zero;
+        if (fighter == null)
+            return Vector3.zero;
+
+        if (fighter != player &&
+            spatialAuthority != null &&
+            spatialAuthority.TryGetNeutralPosition(
+                fighter,
+                out Vector3 neutralPosition))
+        {
+            return neutralPosition;
+        }
+
+        return fighter.transform.position;
     }
 
     private Quaternion CalculateTargetRotation()
@@ -401,12 +413,7 @@ public sealed class CombatCameraController : MonoBehaviour
     private Quaternion CalculateDuelFrameRotation()
     {
         Vector3 duelDirection =
-            opponent != null
-                ? Horizontal(
-                    opponent.transform.position -
-                    player.transform.position
-                )
-                : Horizontal(player.transform.forward);
+            Horizontal(player.transform.forward);
         if (duelDirection.sqrMagnitude <= 0.000001f)
             duelDirection = Vector3.forward;
 

@@ -1,5 +1,6 @@
 using System;
 using System.Linq;
+using System.Reflection;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -24,6 +25,7 @@ public static class V07PlayModeValidation
     private static FighterStats playerStats;
     private static FighterStats enemyStats;
     private static EnemyAutoCombat enemyAI;
+    private static CombatCameraController cameraController;
 
     static V07PlayModeValidation()
     {
@@ -73,7 +75,8 @@ public static class V07PlayModeValidation
         {
             Debug.Log(
                 "V07PlayModeValidation: deterministic attacks, " +
-                "enemy telegraph, whiff feedback, trade, buffer " +
+                "enemy telegraph, stable off-axis camera, telegraphed " +
+                "dodge stability, whiff feedback, trade, buffer " +
                 "clearing, guard, parry, guard break, dodges, " +
                 "permutation invulnerability, flank timer, infinite " +
                 "stamina and replay reset passed."
@@ -149,6 +152,9 @@ public static class V07PlayModeValidation
         enemyAI ??=
             UnityEngine.Object.FindFirstObjectByType<
                 EnemyAutoCombat>();
+        cameraController ??=
+            UnityEngine.Object.FindFirstObjectByType<
+                CombatCameraController>();
         enemyAI?.SetAIEnabled(false);
 
         return frameSystem != null &&
@@ -159,7 +165,8 @@ public static class V07PlayModeValidation
                player.FrameRunner != null &&
                enemy.FrameRunner != null &&
                playerStats != null &&
-               enemyStats != null;
+               enemyStats != null &&
+               cameraController != null;
     }
 
     private static void RunValidation()
@@ -167,6 +174,8 @@ public static class V07PlayModeValidation
         ValidateAttackAndHitstop();
         ValidateAttackBAndC();
         ValidateEnemyAttackTelegraph();
+        ValidateOffAxisEnemyAttackKeepsCameraStable();
+        ValidateTelegraphedDodgeKeepsFlank();
         ValidateOffAxisWhiff();
         ValidateTrade();
         ValidateBufferExpiry();
@@ -313,6 +322,168 @@ public static class V07PlayModeValidation
 
         enemyAI.SetAIEnabled(false);
         ResetScenario();
+    }
+
+    private static void ValidateOffAxisEnemyAttackKeepsCameraStable()
+    {
+        ResetScenario();
+        enemyAI.SetAIEnabled(false);
+        RequireStarted(
+            player.DodgeRight(),
+            "Camera-stability flank dodge"
+        );
+        Advance(26);
+        Require(
+            spatial.CurrentOrientation is
+                RelativeOrientation.LeftFlank or
+                RelativeOrientation.RightFlank,
+            "Camera-stability dodge did not create a flank."
+        );
+
+        cameraController.ResetCameraView(true);
+        Vector3 stablePlayerPosition = player.transform.position;
+        Quaternion stablePlayerRotation = player.transform.rotation;
+        Vector3 stableCameraPosition =
+            Camera.main.transform.position;
+        Quaternion stableCameraRotation =
+            Camera.main.transform.rotation;
+        float stableZoom = cameraController.CurrentZoom;
+
+        RequireStarted(
+            enemy.LightAttack(),
+            "Off-axis enemy camera-stability attack"
+        );
+        for (int frame = 0; frame < 24; frame++)
+        {
+            Advance(1);
+            cameraController.ResetCameraView(true);
+            Require(
+                Vector3.Distance(
+                    stablePlayerPosition,
+                    player.transform.position
+                ) <= Tolerance,
+                "Enemy lunge moved the flanking player."
+            );
+            Require(
+                Quaternion.Angle(
+                    stablePlayerRotation,
+                    player.transform.rotation
+                ) <= Tolerance,
+                "Enemy lunge rotated the flanking player."
+            );
+            Require(
+                Vector3.Distance(
+                    stableCameraPosition,
+                    Camera.main.transform.position
+                ) <= Tolerance,
+                "Enemy lunge displaced the camera."
+            );
+            Require(
+                Quaternion.Angle(
+                    stableCameraRotation,
+                    Camera.main.transform.rotation
+                ) <= Tolerance,
+                "Enemy lunge rotated the camera."
+            );
+            RequireNear(
+                cameraController.CurrentZoom,
+                stableZoom,
+                "Enemy lunge camera zoom"
+            );
+        }
+
+        RequireNear(
+            playerStats.CurrentHealth,
+            100f,
+            "Off-axis enemy attack damage"
+        );
+        RequireEqual(
+            enemy.FrameRunner.LastOutcome,
+            CombatFrameOutcome.Whiff,
+            "Off-axis enemy attack outcome"
+        );
+    }
+
+    private static void ValidateTelegraphedDodgeKeepsFlank()
+    {
+        ResetScenario();
+        CombatRulesConfig rules = enemy.Rules;
+        float originalProbability = GetPrivateField<float>(
+            rules,
+            "aiCompensationProbability"
+        );
+
+        try
+        {
+            SetPrivateField(
+                rules,
+                "aiCompensationProbability",
+                1f
+            );
+            enemyAI.SetAIEnabled(true);
+
+            int searchLimit = 240;
+            while (!enemyAI.IsAttackTelegraphing &&
+                   searchLimit-- > 0)
+            {
+                Advance(1);
+            }
+
+            Require(
+                enemyAI.IsAttackTelegraphing,
+                "Enemy AI did not telegraph the dodge-stability attack."
+            );
+            RequireStarted(
+                player.DodgeRight(),
+                "Telegraphed right dodge"
+            );
+            Advance(20);
+            Require(
+                spatial.CurrentOrientation is
+                    RelativeOrientation.LeftFlank or
+                    RelativeOrientation.RightFlank,
+                "Telegraphed dodge did not commit its flank."
+            );
+            RequireEqual(
+                GetPrivateField<int>(
+                    enemyAI,
+                    "compensationDueFrame"
+                ),
+                -1,
+                "Telegraphed dodge AI compensation"
+            );
+
+            Vector3 committedPlayerPosition =
+                spatial.TryGetNeutralPosition(
+                    player,
+                    out Vector3 neutralPosition)
+                    ? neutralPosition
+                    : player.transform.position;
+            Advance(60);
+            Require(
+                spatial.CurrentOrientation is
+                    RelativeOrientation.LeftFlank or
+                    RelativeOrientation.RightFlank,
+                "Telegraphed dodge returned to Face prematurely."
+            );
+            Require(
+                Vector3.Distance(
+                    committedPlayerPosition,
+                    player.transform.position
+                ) <= Tolerance,
+                "Telegraphed dodge snapped back after commit."
+            );
+        }
+        finally
+        {
+            enemyAI.SetAIEnabled(false);
+            SetPrivateField(
+                rules,
+                "aiCompensationProbability",
+                originalProbability
+            );
+            ResetScenario();
+        }
     }
 
     private static void ValidateAttackBAndC()
@@ -735,6 +906,43 @@ public static class V07PlayModeValidation
             Equals(actual, expected),
             $"{label}: expected {expected}, got {actual}."
         );
+    }
+
+    private static T GetPrivateField<T>(
+        object target,
+        string fieldName)
+    {
+        FieldInfo field = target?.GetType().GetField(
+            fieldName,
+            BindingFlags.Instance | BindingFlags.NonPublic
+        );
+        if (field == null)
+        {
+            throw new InvalidOperationException(
+                $"Field {fieldName} was not found."
+            );
+        }
+
+        return (T)field.GetValue(target);
+    }
+
+    private static void SetPrivateField<T>(
+        object target,
+        string fieldName,
+        T value)
+    {
+        FieldInfo field = target?.GetType().GetField(
+            fieldName,
+            BindingFlags.Instance | BindingFlags.NonPublic
+        );
+        if (field == null)
+        {
+            throw new InvalidOperationException(
+                $"Field {fieldName} was not found."
+            );
+        }
+
+        field.SetValue(target, value);
     }
 
     private static void Require(bool condition, string message)
