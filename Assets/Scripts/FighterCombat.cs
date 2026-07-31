@@ -1259,6 +1259,19 @@ public class FighterCombat : MonoBehaviour
             );
         }
 
+        if (spatialController != null &&
+            spatialController.IsFacingPivot(this, direction))
+        {
+            StopSpatialMovement();
+            ClearRiposteWindow();
+            return spatialController.TryApplyFacingPivot(
+                this,
+                direction
+            )
+                ? CombatActionResult.Started
+                : RefuseUnavailable();
+        }
+
         if (fighterStats.CurrentStamina + Mathf.Epsilon <
             dodgeStaminaCost)
         {
@@ -1277,9 +1290,13 @@ public class FighterCombat : MonoBehaviour
             ))
         {
             CombatRefusalReason reason =
-                direction is DodgeDirection.Forward or
-                    DodgeDirection.Backward
-                    ? CombatRefusalReason.DistanceLimit
+                (direction is DodgeDirection.Forward or
+                 DodgeDirection.Backward) &&
+                !spatialController.IsFacingTarget(this)
+                    ? CombatRefusalReason.IncompatibleOrientation
+                    : direction is DodgeDirection.Forward or
+                        DodgeDirection.Backward
+                        ? CombatRefusalReason.DistanceLimit
                     : CombatRefusalReason.IncompatibleOrientation;
             return Refuse(
                 CombatActionResult.Unavailable,

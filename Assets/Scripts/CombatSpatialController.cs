@@ -48,7 +48,8 @@ public enum CombatSpatialChangeReason
     DuelReset = 10,
     SignificantAction = 11,
     CombatEnabledChanged = 12,
-    DodgeInterrupted = 13
+    DodgeInterrupted = 13,
+    ManualFaced = 14
 }
 
 [Serializable]
@@ -596,6 +597,13 @@ public sealed class CombatSpatialController : MonoBehaviour
             return false;
         }
 
+        if ((direction is DodgeDirection.Forward or
+             DodgeDirection.Backward) &&
+            !IsFacingTarget(fighter))
+        {
+            return false;
+        }
+
         if (direction == DodgeDirection.Forward)
             return distanceLevel != DistanceLevel.CloseRange;
         if (direction == DodgeDirection.Backward)
@@ -607,6 +615,93 @@ public sealed class CombatSpatialController : MonoBehaviour
             out _,
             out _
         );
+    }
+
+    public bool IsFacingTarget(FighterCombat fighter)
+    {
+        if (!IsInitialized || !Contains(fighter))
+            return false;
+
+        Pose fighterPose = fighter == firstFighter
+            ? firstNeutralPose
+            : secondNeutralPose;
+        Pose targetPose = fighter == firstFighter
+            ? secondNeutralPose
+            : firstNeutralPose;
+        Vector3 forward = Horizontal(
+            fighterPose.rotation * Vector3.forward
+        );
+        Vector3 toTarget = Horizontal(
+            targetPose.position - fighterPose.position
+        );
+        if (forward.sqrMagnitude <= PositionEpsilon ||
+            toTarget.sqrMagnitude <= PositionEpsilon)
+        {
+            return false;
+        }
+
+        return Vector3.Dot(
+            forward.normalized,
+            toTarget.normalized
+        ) >= 0.9999f;
+    }
+
+    public bool IsFacingPivot(
+        FighterCombat fighter,
+        DodgeDirection direction)
+    {
+        if (!IsInitialized ||
+            !combatEnabled ||
+            hasPendingDodge ||
+            !Contains(fighter) ||
+            direction is not (DodgeDirection.Left or
+                DodgeDirection.Right) ||
+            !IsFlank(relativeOrientation) ||
+            !flankDodgeDirection.HasValue)
+        {
+            return false;
+        }
+
+        return advantageFighter != fighter &&
+               direction != flankDodgeDirection.Value;
+    }
+
+    public bool TryApplyFacingPivot(
+        FighterCombat fighter,
+        DodgeDirection direction)
+    {
+        if (!IsFacingPivot(fighter, direction))
+            return false;
+
+        RelativeOrientation previousOrientation =
+            relativeOrientation;
+        StopMovement(fighter);
+        relativeOrientation = RelativeOrientation.Face;
+        advantageFighter = null;
+        flankDodgeDirection = null;
+        flankElapsed = 0f;
+        flankElapsedFrames = 0;
+        pendingAutoFace = false;
+        SetFaceRotations();
+        ApplyRotation(
+            firstFighter.transform,
+            firstNeutralPose.rotation
+        );
+        ApplyRotation(
+            secondFighter.transform,
+            secondNeutralPose.rotation
+        );
+
+        Publish(
+            CombatSpatialChangeReason.ManualFaced,
+            fighter,
+            0
+        );
+        OnOrientationChanged?.Invoke(
+            previousOrientation,
+            relativeOrientation
+        );
+        return true;
     }
 
     private void Awake()
@@ -861,6 +956,9 @@ public sealed class CombatSpatialController : MonoBehaviour
         if (direction is DodgeDirection.Forward or
             DodgeDirection.Backward)
         {
+            if (!IsFacingTarget(fighter))
+                return false;
+
             distanceAfter = ResolveDodgeDistance(
                 distanceLevel,
                 direction
@@ -868,7 +966,8 @@ public sealed class CombatSpatialController : MonoBehaviour
             if (distanceAfter == distanceLevel)
                 return false;
         }
-        else if (!TryResolveDodgeTransition(
+        else if (IsFacingPivot(fighter, direction) ||
+                 !TryResolveDodgeTransition(
                      fighter,
                      direction,
                      out orientationAfter,
@@ -1640,16 +1739,8 @@ public sealed class CombatSpatialController : MonoBehaviour
             direction == flankDodgeDirection.Value;
         if (advantageFighter != fighter)
         {
-            if (sameDirection)
-            {
-                orientationAfter = RelativeOrientation.Face;
-                advantageAfter = null;
-            }
-            else
-            {
-                orientationAfter = RelativeOrientation.Back;
-                advantageAfter = fighter;
-            }
+            orientationAfter = RelativeOrientation.Face;
+            advantageAfter = null;
             return true;
         }
 

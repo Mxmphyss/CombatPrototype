@@ -138,61 +138,81 @@ public static class V061CorrectionValidation
             6f,
             "A lateral dodge must preserve the distance anchor."
         );
-        Quaternion firstFlankRotation =
-            context.Controller.Snapshot.FirstNeutralPose.rotation;
-        Quaternion secondFlankRotation =
-            context.Controller.Snapshot.SecondNeutralPose.rotation;
-        CommitDodge(
-            context,
-            DodgeDirection.Forward,
-            DistanceLevel.CloseRange
+        Require(
+            context.Controller.IsFacingTarget(context.FirstCombat),
+            "The flank winner must remain centred on its target."
         );
         Require(
-            context.Controller.CurrentOrientation ==
-                RelativeOrientation.LeftFlank,
-            "A radial dodge erased the flank state."
-        );
-        Require(
-            Quaternion.Angle(
-                firstFlankRotation,
-                context.Controller.Snapshot.FirstNeutralPose.rotation
-            ) <= 0.001f &&
-            Quaternion.Angle(
-                secondFlankRotation,
-                context.Controller.Snapshot.SecondNeutralPose.rotation
-            ) <= 0.001f,
-            "A radial dodge auto-rotated a flank."
-        );
-        CommitDodge(
-            context,
-            DodgeDirection.Left,
-            DistanceLevel.CloseRange
-        );
-        Require(
-            context.Controller.CurrentOrientation ==
-                RelativeOrientation.Back,
-            "A radial dodge erased the lateral sequence toward Back."
+            !context.Controller.IsFacingTarget(context.SecondCombat),
+            "The disadvantaged fighter unexpectedly faced its target."
         );
         Require(
             context.Controller.CanDodge(
                 context.FirstCombat,
-                DodgeDirection.Left
+                DodgeDirection.Forward
             ) &&
             context.Controller.CanDodge(
                 context.FirstCombat,
+                DodgeDirection.Backward
+            ),
+            "A centred fighter must retain its distance dodges."
+        );
+        Require(
+            !context.Controller.CanDodge(
+                context.SecondCombat,
+                DodgeDirection.Forward
+            ) &&
+            !context.Controller.CanDodge(
+                context.SecondCombat,
+                DodgeDirection.Backward
+            ),
+            "An off-axis fighter must not use a distance dodge."
+        );
+
+        Vector3 firstBeforePivot =
+            context.FirstCombat.transform.position;
+        Vector3 secondBeforePivot =
+            context.SecondCombat.transform.position;
+        Require(
+            context.Controller.IsFacingPivot(
+                context.SecondCombat,
                 DodgeDirection.Right
             ),
-            "A fighter must be able to dodge laterally from Back."
+            "The opposite lateral input must resolve as a facing pivot."
         );
-        CommitDodge(
-            context,
-            DodgeDirection.Right,
-            DistanceLevel.CloseRange
+        Require(
+            !context.Controller.TryPrepareDodge(
+                context.SecondCombat,
+                DodgeDirection.Right,
+                out _
+            ),
+            "A facing pivot was incorrectly prepared as a dodge."
+        );
+        Require(
+            context.Controller.TryApplyFacingPivot(
+                context.SecondCombat,
+                DodgeDirection.Right
+            ),
+            "Unable to apply the disadvantaged fighter pivot."
+        );
+        Require(
+            Vector3.Distance(
+                firstBeforePivot,
+                context.FirstCombat.transform.position
+            ) <= Tolerance &&
+            Vector3.Distance(
+                secondBeforePivot,
+                context.SecondCombat.transform.position
+            ) <= Tolerance,
+            "The facing pivot moved a fighter."
         );
         Require(
             context.Controller.CurrentOrientation ==
-                RelativeOrientation.RightFlank,
-            "A right dodge from Back must reach the right flank."
+                RelativeOrientation.Face &&
+            context.Controller.AdvantageFighter == null &&
+            context.Controller.IsFacingTarget(context.FirstCombat) &&
+            context.Controller.IsFacingTarget(context.SecondCombat),
+            "The pivot did not restore an exact mutual facing."
         );
 
         context.Controller.ResetDuel();
@@ -201,21 +221,22 @@ public static class V061CorrectionValidation
             DodgeDirection.Right,
             DistanceLevel.MidRange
         );
+        Vector3 secondBeforeTrueDodge =
+            context.SecondCombat.transform.position;
         Require(
             context.Controller.CanDodge(
                 context.SecondCombat,
-                DodgeDirection.Left
+                DodgeDirection.Right
             ),
-            "The disadvantaged fighter must be able to dodge " +
-            "in either lateral direction."
+            "The disadvantaged fighter must retain its true lateral dodge."
         );
         Require(
             context.Controller.TryPrepareDodge(
                 context.SecondCombat,
-                DodgeDirection.Left,
+                DodgeDirection.Right,
                 out SpatialDodgeTransaction counterDodge
             ),
-            "Unable to prepare the disadvantaged fighter dodge."
+            "Unable to prepare the disadvantaged true dodge."
         );
         context.Controller.PreviewPreparedDodge(
             counterDodge.Id,
@@ -227,10 +248,13 @@ public static class V061CorrectionValidation
         );
         Require(
             context.Controller.CurrentOrientation ==
-                RelativeOrientation.Back &&
-            context.Controller.AdvantageFighter ==
-                context.SecondCombat,
-            "The counter-dodge must grant the new back advantage."
+                RelativeOrientation.Face &&
+            context.Controller.AdvantageFighter == null &&
+            Vector3.Distance(
+                secondBeforeTrueDodge,
+                context.SecondCombat.transform.position
+            ) > Tolerance,
+            "The same-direction input must move, then restore facing."
         );
         context.Controller.ResetDuel();
     }
@@ -268,6 +292,8 @@ public static class V061CorrectionValidation
             "A forward attack incorrectly hit a target on the flank."
         );
 
+        Vector3 opponentBeforeCompensation =
+            context.SecondCombat.transform.position;
         Require(
             context.Controller.TryPrepareDodge(
                 context.SecondCombat,
@@ -288,7 +314,11 @@ public static class V061CorrectionValidation
             context.Controller.CurrentOrientation ==
                 RelativeOrientation.Face &&
             context.FirstCombat.CanHitCurrentTarget() &&
-            context.SecondCombat.CanHitCurrentTarget(),
+            context.SecondCombat.CanHitCurrentTarget() &&
+            Vector3.Distance(
+                opponentBeforeCompensation,
+                context.SecondCombat.transform.position
+            ) > Tolerance,
             "Both forward attack arcs must contain the target after facing."
         );
 

@@ -191,6 +191,7 @@ public static class V07PlayModeValidation
         ValidateBlockClearsBuffer();
         ValidateInterruptedDodge();
         ValidateDistanceDodgeJumpArc();
+        ValidateFacingPivotRules();
         ValidateDodgeWindows();
         ValidatePermutation();
         ValidatePermutationInvulnerability();
@@ -798,6 +799,134 @@ public static class V07PlayModeValidation
             spatial.CurrentDistance,
             DistanceLevel.LongRange,
             "Backward jump distance"
+        );
+    }
+
+    private static void ValidateFacingPivotRules()
+    {
+        ResetScenario();
+        RequireStarted(
+            player.DodgeRight(),
+            "Pivot source dodge"
+        );
+        Advance(26);
+        Vector3 playerBeforePivot = player.transform.position;
+        Vector3 enemyBeforePivot = enemy.transform.position;
+        float enemyStaminaBeforePivot =
+            enemyStats.CurrentStamina;
+
+        RequireStarted(
+            enemy.DodgeLeft(),
+            "Disadvantaged facing pivot"
+        );
+        Advance(1);
+        RequireNear(
+            Vector3.Distance(
+                playerBeforePivot,
+                player.transform.position
+            ),
+            0f,
+            "Pivot player displacement"
+        );
+        RequireNear(
+            Vector3.Distance(
+                enemyBeforePivot,
+                enemy.transform.position
+            ),
+            0f,
+            "Pivot enemy displacement"
+        );
+        RequireNear(
+            enemyStats.CurrentStamina,
+            enemyStaminaBeforePivot,
+            "Pivot stamina cost"
+        );
+        Require(
+            !enemy.FrameRunner.IsDodging &&
+            !enemy.FrameRunner.IsInvulnerable,
+            "The facing pivot became an invulnerable dodge."
+        );
+        Require(
+            spatial.CurrentOrientation ==
+                RelativeOrientation.Face &&
+            spatial.AdvantageFighter == null &&
+            spatial.IsFacingTarget(player) &&
+            spatial.IsFacingTarget(enemy),
+            "The facing pivot did not restore exact mutual facing."
+        );
+
+        ResetScenario();
+        RequireStarted(
+            player.DodgeRight(),
+            "True-dodge flank source"
+        );
+        Advance(26);
+        Vector3 enemyBeforeTrueDodge =
+            enemy.transform.position;
+        float enemyStaminaBeforeTrueDodge =
+            enemyStats.CurrentStamina;
+        RequireStarted(
+            enemy.DodgeRight(),
+            "Disadvantaged true lateral dodge"
+        );
+        Advance(26);
+        Require(
+            Vector3.Distance(
+                enemyBeforeTrueDodge,
+                enemy.transform.position
+            ) > Tolerance,
+            "The true lateral dodge did not change position."
+        );
+        Require(
+            enemyStats.CurrentStamina <
+                enemyStaminaBeforeTrueDodge,
+            "The true lateral dodge did not spend stamina."
+        );
+        Require(
+            spatial.CurrentOrientation ==
+                RelativeOrientation.Face &&
+            spatial.IsFacingTarget(player) &&
+            spatial.IsFacingTarget(enemy),
+            "The true lateral dodge did not finish facing the target."
+        );
+
+        ResetScenario();
+        RequireStarted(
+            player.DodgeRight(),
+            "Off-axis distance-dodge source"
+        );
+        Advance(26);
+        Vector3 enemyBeforeRejectedDodge =
+            enemy.transform.position;
+        float enemyStaminaBeforeRejectedDodge =
+            enemyStats.CurrentStamina;
+        RequireEqual(
+            enemy.DodgeForward(),
+            CombatActionResult.Unavailable,
+            "Off-axis forward dodge rejection"
+        );
+        RequireEqual(
+            enemy.DodgeBackward(),
+            CombatActionResult.Unavailable,
+            "Off-axis backward dodge rejection"
+        );
+        RequireNear(
+            Vector3.Distance(
+                enemyBeforeRejectedDodge,
+                enemy.transform.position
+            ),
+            0f,
+            "Rejected distance-dodge displacement"
+        );
+        RequireNear(
+            enemyStats.CurrentStamina,
+            enemyStaminaBeforeRejectedDodge,
+            "Rejected distance-dodge stamina"
+        );
+        Require(
+            spatial.CanDodge(player, DodgeDirection.Forward) &&
+            spatial.CanDodge(player, DodgeDirection.Backward),
+            "The centred flank winner lost its distance dodges."
         );
     }
 
