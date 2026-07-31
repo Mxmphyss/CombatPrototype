@@ -80,6 +80,8 @@ public sealed class CombatSpatialSettings
     [Header("Esquive")]
     [Range(0f, 180f)]
     [SerializeField] private float dodgeOrientationAngle = 90f;
+    [Min(0f)]
+    [SerializeField] private float distanceDodgeJumpHeight = 1f;
 
     [Header("Orientation")]
     [SerializeField] private bool autoFaceFlanks = true;
@@ -162,6 +164,12 @@ public sealed class CombatSpatialSettings
     {
         get => dodgeOrientationAngle;
         set => dodgeOrientationAngle = value;
+    }
+
+    public float DistanceDodgeJumpHeight
+    {
+        get => distanceDodgeJumpHeight;
+        set => distanceDodgeJumpHeight = value;
     }
 
     public bool AutoFaceFlanks
@@ -928,6 +936,18 @@ public sealed class CombatSpatialController : MonoBehaviour
             progress
         );
 
+        if (pendingDodge.Direction is
+            DodgeDirection.Forward or DodgeDirection.Backward)
+        {
+            float jumpOffset =
+                settings.DistanceDodgeJumpHeight *
+                4f * progress * (1f - progress);
+            if (pendingDodge.Fighter == firstFighter)
+                firstPreview.position += Vector3.up * jumpOffset;
+            else
+                secondPreview.position += Vector3.up * jumpOffset;
+        }
+
         if (pendingDodge.Fighter == firstFighter)
         {
             ApplyPose(firstFighter.transform, firstPreview);
@@ -1042,9 +1062,17 @@ public sealed class CombatSpatialController : MonoBehaviour
         SpatialDodgeTransaction interrupted = pendingDodge;
         FighterCombat fighter = interrupted.Fighter;
         if (fighter == firstFighter)
-            firstNeutralPose = ReadPose(firstFighter.transform);
+        {
+            Pose interruptedPose = ReadPose(firstFighter.transform);
+            interruptedPose.position.y = firstNeutralPose.position.y;
+            firstNeutralPose = interruptedPose;
+        }
         else if (fighter == secondFighter)
-            secondNeutralPose = ReadPose(secondFighter.transform);
+        {
+            Pose interruptedPose = ReadPose(secondFighter.transform);
+            interruptedPose.position.y = secondNeutralPose.position.y;
+            secondNeutralPose = interruptedPose;
+        }
 
         distanceLevel = ResolveDistanceLevel(
             GetHorizontalSeparation()

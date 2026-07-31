@@ -392,13 +392,17 @@ public sealed class CombatCameraController : MonoBehaviour
         if (fighter == null)
             return Vector3.zero;
 
-        if (fighter != player &&
-            spatialAuthority != null &&
+        if (spatialAuthority != null &&
             spatialAuthority.TryGetNeutralPosition(
                 fighter,
                 out Vector3 neutralPosition))
         {
-            return neutralPosition;
+            if (fighter != player)
+                return neutralPosition;
+
+            Vector3 currentPosition = fighter.transform.position;
+            currentPosition.y = neutralPosition.y;
+            return currentPosition;
         }
 
         return fighter.transform.position;

@@ -190,6 +190,7 @@ public static class V07PlayModeValidation
         ValidateHeldGuardAndGuardBreak();
         ValidateBlockClearsBuffer();
         ValidateInterruptedDodge();
+        ValidateDistanceDodgeJumpArc();
         ValidateDodgeWindows();
         ValidatePermutation();
         ValidatePermutationInvulnerability();
@@ -732,6 +733,71 @@ public static class V07PlayModeValidation
             player.FrameRunner.BufferedCommand,
             CombatActionId.None,
             "Blockstun cleared the command buffer"
+        );
+    }
+
+    private static void ValidateDistanceDodgeJumpArc()
+    {
+        ResetScenario();
+        float forwardGroundY = player.transform.position.y;
+        cameraController.ResetCameraView(true);
+        float forwardCameraY = Camera.main.transform.position.y;
+        RequireStarted(
+            player.DodgeForward(),
+            "Forward jump dodge"
+        );
+        Advance(9);
+        cameraController.ResetCameraView(true);
+        Require(
+            player.transform.position.y > forwardGroundY + 0.25f,
+            "Forward dodge did not rise into a jump arc."
+        );
+        RequireNear(
+            Camera.main.transform.position.y,
+            forwardCameraY,
+            "Forward jump camera height"
+        );
+        Advance(11);
+        RequireNear(
+            player.transform.position.y,
+            forwardGroundY,
+            "Forward jump landing height"
+        );
+        RequireEqual(
+            spatial.CurrentDistance,
+            DistanceLevel.CloseRange,
+            "Forward jump distance"
+        );
+
+        ResetScenario();
+        float backwardGroundY = player.transform.position.y;
+        cameraController.ResetCameraView(true);
+        float backwardCameraY = Camera.main.transform.position.y;
+        RequireStarted(
+            player.DodgeBackward(),
+            "Backward jump dodge"
+        );
+        Advance(9);
+        cameraController.ResetCameraView(true);
+        Require(
+            player.transform.position.y > backwardGroundY + 0.25f,
+            "Backward dodge did not rise into a jump arc."
+        );
+        RequireNear(
+            Camera.main.transform.position.y,
+            backwardCameraY,
+            "Backward jump camera height"
+        );
+        Advance(11);
+        RequireNear(
+            player.transform.position.y,
+            backwardGroundY,
+            "Backward jump landing height"
+        );
+        RequireEqual(
+            spatial.CurrentDistance,
+            DistanceLevel.LongRange,
+            "Backward jump distance"
         );
     }
 

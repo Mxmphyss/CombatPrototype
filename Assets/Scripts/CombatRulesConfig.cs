@@ -70,6 +70,8 @@ public sealed class CombatRulesConfig : ScriptableObject
     [SerializeField] private float dodgeSpatialDuration = 0.28f;
     [Min(MinimumPositiveValue)]
     [SerializeField] private float dodgeSpatialSpeed = 12f;
+    [Min(0f)]
+    [SerializeField] private float distanceDodgeJumpHeight = 1f;
     [Range(0f, 180f)]
     [SerializeField] private float dodgeOrientationAngle = 90f;
     [Min(0f)]
@@ -165,6 +167,8 @@ public sealed class CombatRulesConfig : ScriptableObject
         Mathf.Max(MinimumPositiveValue, dodgeSpatialDuration);
     public float DodgeSpatialSpeed =>
         Mathf.Max(MinimumPositiveValue, dodgeSpatialSpeed);
+    public float DistanceDodgeJumpHeight =>
+        Mathf.Max(0f, distanceDodgeJumpHeight);
     public float DodgeOrientationAngle =>
         Mathf.Clamp(dodgeOrientationAngle, 0f, 180f);
     public float DodgeStartupDuration =>

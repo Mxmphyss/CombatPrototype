@@ -364,6 +364,8 @@ public sealed class CombatManager : MonoBehaviour
             RotationSpeed = rules.RotationSpeed,
             DodgeOrientationAngle =
                 rules.DodgeOrientationAngle,
+            DistanceDodgeJumpHeight =
+                rules.DistanceDodgeJumpHeight,
             AutoFaceFlanks = true,
             FlankAutoFaceDelay =
                 rules.FlankAutoFaceDelay,
