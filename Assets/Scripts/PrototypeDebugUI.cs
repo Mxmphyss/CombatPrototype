@@ -9,6 +9,8 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         new(0.18f, 0.55f, 0.32f, 0.96f);
     private static readonly Color PausedColor =
         new(0.72f, 0.35f, 0.14f, 0.96f);
+    private static readonly Color TraceReadyColor =
+        new(0.78f, 0.16f, 0.18f, 0.98f);
 
     private EnemyAutoCombat enemyAI;
     private FighterCombat playerCombat;
@@ -451,9 +453,10 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             CreatePrototypeButton(
                 "Prototype Combat Trace Capture",
                 new Vector2(-20f, -222f),
-                new Vector2(330f, 44f),
+                new Vector2(160f, 44f),
                 out traceCaptureLabel
             );
+        traceCaptureLabel.fontSize = 16;
         traceCaptureImage = buttonObject.GetComponent<Image>();
         traceCaptureButton = buttonObject.GetComponent<Button>();
         traceCaptureButton.onClick.AddListener(CaptureCombatTrace);
@@ -563,7 +566,9 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         {
             traceCaptureImage.color = capturing
                 ? PausedColor
-                : EnabledColor;
+                : saved
+                    ? EnabledColor
+                    : TraceReadyColor;
         }
         if (traceCaptureLabel != null)
         {
@@ -572,8 +577,8 @@ public sealed class PrototypeDebugUI : MonoBehaviour
                 : capturing
                     ? "CAPTURE EN COURS..."
                     : saved
-                        ? "SIGNALER LE BUG - TRACE SAUVEE"
-                        : "SIGNALER LE BUG";
+                        ? "TRACE SAUVEE - NOUVEAU RAPPORT"
+                        : "SIGNALER UN BUG";
         }
     }
 

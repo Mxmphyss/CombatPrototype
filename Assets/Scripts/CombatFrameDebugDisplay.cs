@@ -84,8 +84,8 @@ public sealed class CombatFrameDebugDisplay : MonoBehaviour
         rect.anchorMin = rect.anchorMax =
             new Vector2(1f, 1f);
         rect.pivot = new Vector2(1f, 1f);
-        rect.anchoredPosition = new Vector2(-20f, -222f);
-        rect.sizeDelta = new Vector2(330f, 44f);
+        rect.anchoredPosition = new Vector2(-190f, -222f);
+        rect.sizeDelta = new Vector2(160f, 44f);
 
         toggleImage = buttonObject.AddComponent<Image>();
         toggleButton = buttonObject.AddComponent<Button>();
@@ -96,7 +96,7 @@ public sealed class CombatFrameDebugDisplay : MonoBehaviour
             "Label",
             Vector2.zero,
             Vector2.zero,
-            18,
+            14,
             TextAnchor.MiddleCenter
         );
         RectTransform labelRect =
