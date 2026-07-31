@@ -15,6 +15,7 @@ public sealed class CombatManager : MonoBehaviour
     private CombatDistanceDebugVisualizer distanceVisualizer;
     private CombatFrameClock frameClock;
     private CombatFrameSystem frameSystem;
+    private CombatTraceRecorder traceRecorder;
     private bool combatEnded;
     private bool isResetting;
 
@@ -148,6 +149,18 @@ public sealed class CombatManager : MonoBehaviour
                     EnemyAutoCombat>();
         }
 
+        traceRecorder =
+            gameObject.AddComponent<CombatTraceRecorder>();
+        traceRecorder.Initialize(
+            playerCombat,
+            enemyCombat,
+            frameSystem,
+            spatialController,
+            hud.GestureGrid,
+            enemyAI,
+            mainCamera
+        );
+
         prototypeDebugUI = PrototypeDebugUI.Create(
             hud.transform,
             enemyAI,
@@ -158,7 +171,8 @@ public sealed class CombatManager : MonoBehaviour
             distanceVisualizer,
             frameSystem,
             enemyStats,
-            hud.EnemyPanel
+            hud.EnemyPanel,
+            traceRecorder
         );
 
         feedbackEffects =
@@ -187,6 +201,7 @@ public sealed class CombatManager : MonoBehaviour
             return;
 
         isResetting = true;
+        traceRecorder?.RecordSystemEvent("REPLAY_RESET_STARTED");
 
         CancelTransientCombatState(true);
 
@@ -214,11 +229,13 @@ public sealed class CombatManager : MonoBehaviour
         prototypeDebugUI?.ResetForReplay();
         cameraController?.ResetCameraView(true);
         distanceVisualizer?.ResetForReplay();
+        traceRecorder?.RecordSystemEvent("REPLAY_RESET_COMPLETED");
         isResetting = false;
     }
 
     private void StartCombat()
     {
+        traceRecorder?.RecordSystemEvent("COMBAT_STARTING");
         combatEnded = false;
         hud.SetGridEnabled(false);
         hud.GestureGrid?.ResetForReplay();
@@ -241,6 +258,7 @@ public sealed class CombatManager : MonoBehaviour
         prototypeDebugUI?.ResetForReplay();
         cameraController?.ResetCameraView(true);
         distanceVisualizer?.ResetForReplay();
+        traceRecorder?.RecordSystemEvent("COMBAT_STARTED");
     }
 
     private void EndCombat(bool playerWon)
@@ -249,6 +267,11 @@ public sealed class CombatManager : MonoBehaviour
             return;
 
         combatEnded = true;
+        traceRecorder?.RecordSystemEvent(
+            playerWon
+                ? "COMBAT_ENDED_PLAYER_WIN"
+                : "COMBAT_ENDED_PLAYER_LOSS"
+        );
         CancelTransientCombatState(true);
         hud.ShowEndState(playerWon);
     }

@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using UnityEditor;
@@ -26,6 +27,7 @@ public static class V07PlayModeValidation
     private static FighterStats enemyStats;
     private static EnemyAutoCombat enemyAI;
     private static CombatCameraController cameraController;
+    private static CombatTraceRecorder traceRecorder;
 
     static V07PlayModeValidation()
     {
@@ -79,7 +81,8 @@ public static class V07PlayModeValidation
                 "dodge stability, whiff feedback, trade, buffer " +
                 "clearing, guard, parry, guard break, dodges, " +
                 "permutation invulnerability, flank timer, infinite " +
-                "stamina and replay reset passed."
+                "stamina, replay reset and combat flight recorder " +
+                "capture passed."
             );
             EditorApplication.Exit(0);
         }
@@ -155,6 +158,9 @@ public static class V07PlayModeValidation
         cameraController ??=
             UnityEngine.Object.FindFirstObjectByType<
                 CombatCameraController>();
+        traceRecorder ??=
+            UnityEngine.Object.FindFirstObjectByType<
+                CombatTraceRecorder>();
         enemyAI?.SetAIEnabled(false);
 
         return frameSystem != null &&
@@ -166,7 +172,8 @@ public static class V07PlayModeValidation
                enemy.FrameRunner != null &&
                playerStats != null &&
                enemyStats != null &&
-               cameraController != null;
+               cameraController != null &&
+               traceRecorder != null;
     }
 
     private static void RunValidation()
@@ -189,6 +196,7 @@ public static class V07PlayModeValidation
         ValidateFlankTimer();
         ValidateInfiniteStamina();
         ValidateReplayReset();
+        ValidateFlightRecorder();
     }
 
     private static void ValidateAttackAndHitstop()
@@ -853,6 +861,61 @@ public static class V07PlayModeValidation
             spatial.CurrentOrientation == RelativeOrientation.Face,
             "Reset spatial state"
         );
+    }
+
+    private static void ValidateFlightRecorder()
+    {
+        ResetScenario();
+        traceRecorder.RecordSystemEvent(
+            "VALIDATION_TRACE_PRE_MARKER"
+        );
+        RequireStarted(
+            player.DodgeRight(),
+            "Flight recorder dodge"
+        );
+        Advance(8);
+
+        Require(
+            traceRecorder.CaptureReport(),
+            "Flight recorder did not start a capture."
+        );
+        Advance(traceRecorder.PostCaptureFrames + 1);
+
+        Require(
+            !traceRecorder.CapturePending,
+            "Flight recorder capture did not finish."
+        );
+        string path = traceRecorder.LastSavedTracePath;
+        Require(
+            !string.IsNullOrEmpty(path) && File.Exists(path),
+            "Flight recorder report was not written."
+        );
+
+        try
+        {
+            string report = File.ReadAllText(path);
+            Require(
+                report.Contains("BUG_MARKER_USER_REQUESTED"),
+                "Flight recorder report has no user marker."
+            );
+            Require(
+                report.Contains("FRAME|"),
+                "Flight recorder report has no frame samples."
+            );
+            Require(
+                report.Contains("category=SPATIAL"),
+                "Flight recorder report has no spatial events."
+            );
+            Require(
+                report.Contains("source=CombatSpatialController"),
+                "Flight recorder report has no movement source."
+            );
+        }
+        finally
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
     }
 
     private static void ResetScenario()

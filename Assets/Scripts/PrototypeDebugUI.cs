@@ -29,6 +29,10 @@ public sealed class PrototypeDebugUI : MonoBehaviour
     private Text dodgeTimingLabel;
     private Text cameraStateLabel;
     private CombatFrameDebugDisplay frameDebugDisplay;
+    private CombatTraceRecorder traceRecorder;
+    private Button traceCaptureButton;
+    private Image traceCaptureImage;
+    private Text traceCaptureLabel;
 
     public static PrototypeDebugUI Create(
         Transform parent,
@@ -40,7 +44,8 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         CombatDistanceDebugVisualizer distanceDebug = null,
         CombatFrameSystem deterministicFrameSystem = null,
         FighterStats enemyFighterStats = null,
-        RectTransform enemyPanel = null)
+        RectTransform enemyPanel = null,
+        CombatTraceRecorder flightRecorder = null)
     {
         GameObject panelObject =
             new("Prototype Combat Debug UI");
@@ -84,7 +89,8 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             cameraAuthority,
             distanceDebug,
             deterministicFrameSystem,
-            enemyFighterStats
+            enemyFighterStats,
+            flightRecorder
         );
         return debugUI;
     }
@@ -97,7 +103,8 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         CombatCameraController cameraAuthority,
         CombatDistanceDebugVisualizer distanceDebug,
         CombatFrameSystem deterministicFrameSystem,
-        FighterStats enemyFighterStats)
+        FighterStats enemyFighterStats,
+        CombatTraceRecorder flightRecorder)
     {
         enemyAI = enemyAutoCombat;
         playerStats = playerFighterStats;
@@ -107,11 +114,13 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         spatialController = spatialAuthority;
         cameraController = cameraAuthority;
         distanceVisualizer = distanceDebug;
+        traceRecorder = flightRecorder;
         BuildTitle();
         BuildAIToggle();
         BuildCameraReset();
         BuildDistanceToggle();
         BuildStaminaToggle();
+        BuildTraceCapture();
         BuildDodgeTimingState();
         BuildCameraState();
         BuildSpatialState();
@@ -138,10 +147,17 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             spatialController.OnSnapshotChanged +=
                 HandleSpatialSnapshotChanged;
         }
+        if (traceRecorder != null)
+        {
+            traceRecorder.OnCaptureStateChanged +=
+                HandleTraceCaptureStateChanged;
+            traceRecorder.OnReportSaved += HandleTraceSaved;
+        }
 
         RefreshAIToggle();
         RefreshDistanceToggle();
         RefreshStaminaToggle();
+        RefreshTraceCapture();
         RefreshCameraState();
         RefreshSpatialState();
     }
@@ -164,6 +180,12 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             spatialController.OnSnapshotChanged -=
                 HandleSpatialSnapshotChanged;
         }
+        if (traceRecorder != null)
+        {
+            traceRecorder.OnCaptureStateChanged -=
+                HandleTraceCaptureStateChanged;
+            traceRecorder.OnReportSaved -= HandleTraceSaved;
+        }
     }
 
     public void ResetForReplay()
@@ -174,6 +196,7 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         cameraController?.ResetCameraView(true);
         RefreshDistanceToggle();
         RefreshStaminaToggle();
+        RefreshTraceCapture();
         RefreshSpatialState();
     }
 
@@ -422,6 +445,20 @@ public sealed class PrototypeDebugUI : MonoBehaviour
         );
     }
 
+    private void BuildTraceCapture()
+    {
+        GameObject buttonObject =
+            CreatePrototypeButton(
+                "Prototype Combat Trace Capture",
+                new Vector2(-20f, -222f),
+                new Vector2(330f, 44f),
+                out traceCaptureLabel
+            );
+        traceCaptureImage = buttonObject.GetComponent<Image>();
+        traceCaptureButton = buttonObject.GetComponent<Button>();
+        traceCaptureButton.onClick.AddListener(CaptureCombatTrace);
+    }
+
     private GameObject CreatePrototypeButton(
         string objectName,
         Vector2 anchoredPosition,
@@ -485,6 +522,59 @@ public sealed class PrototypeDebugUI : MonoBehaviour
             !playerStats.HasInfiniteStamina
         );
         RefreshStaminaToggle();
+    }
+
+    private void CaptureCombatTrace()
+    {
+        if (traceRecorder == null)
+            return;
+
+        traceRecorder.CaptureReport();
+        RefreshTraceCapture();
+    }
+
+    private void HandleTraceCaptureStateChanged(bool capturing)
+    {
+        RefreshTraceCapture();
+    }
+
+    private void HandleTraceSaved(string path)
+    {
+        RefreshTraceCapture();
+    }
+
+    private void RefreshTraceCapture()
+    {
+        bool available = traceRecorder != null;
+        bool capturing =
+            available && traceRecorder.CapturePending;
+        bool saved =
+            available &&
+            !string.IsNullOrEmpty(
+                traceRecorder.LastSavedTracePath
+            );
+
+        if (traceCaptureButton != null)
+        {
+            traceCaptureButton.interactable =
+                available && !capturing;
+        }
+        if (traceCaptureImage != null)
+        {
+            traceCaptureImage.color = capturing
+                ? PausedColor
+                : EnabledColor;
+        }
+        if (traceCaptureLabel != null)
+        {
+            traceCaptureLabel.text = !available
+                ? "SIGNALER LE BUG - INDISPONIBLE"
+                : capturing
+                    ? "CAPTURE EN COURS..."
+                    : saved
+                        ? "SIGNALER LE BUG - TRACE SAUVEE"
+                        : "SIGNALER LE BUG";
+        }
     }
 
     private void RefreshDistanceToggle()
