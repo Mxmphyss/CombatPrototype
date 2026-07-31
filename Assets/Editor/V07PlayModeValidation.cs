@@ -673,6 +673,46 @@ public static class V07PlayModeValidation
             ) > 0.001f,
             "Interrupted dodge rolled back to its start."
         );
+        bool hasPlayerPose = spatial.TryGetNeutralPose(
+            player,
+            out Pose playerPose
+        );
+        bool hasEnemyPose = spatial.TryGetNeutralPose(
+            enemy,
+            out Pose enemyPose
+        );
+        Require(
+            hasPlayerPose && hasEnemyPose,
+            "Interrupted dodge neutral poses are unavailable."
+        );
+        Quaternion expectedPlayerRotation = Quaternion.LookRotation(
+            Vector3.ProjectOnPlane(
+                enemyPose.position - playerPose.position,
+                Vector3.up
+            ).normalized,
+            Vector3.up
+        );
+        Quaternion expectedEnemyRotation = Quaternion.LookRotation(
+            Vector3.ProjectOnPlane(
+                playerPose.position - enemyPose.position,
+                Vector3.up
+            ).normalized,
+            Vector3.up
+        );
+        Require(
+            Quaternion.Angle(
+                playerPose.rotation,
+                expectedPlayerRotation
+            ) <= Tolerance,
+            "Interrupted dodger is not centred on the opponent."
+        );
+        Require(
+            Quaternion.Angle(
+                enemyPose.rotation,
+                expectedEnemyRotation
+            ) <= Tolerance,
+            "Interrupted dodge opponent is not centred on the dodger."
+        );
     }
 
     private static void ValidateBlockClearsBuffer()

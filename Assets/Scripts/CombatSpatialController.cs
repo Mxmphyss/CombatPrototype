@@ -1055,6 +1055,23 @@ public sealed class CombatSpatialController : MonoBehaviour
         flankElapsedFrames = 0;
         pendingAutoFace = false;
 
+        // An interrupted dodge keeps its current position, but it never
+        // grants a flank. Recompute both neutral rotations from the real
+        // resulting positions so the fighters remain exactly centred on
+        // each other instead of retaining an intermediate preview angle.
+        if (relativeOrientation == RelativeOrientation.Face)
+        {
+            SetFaceRotations();
+            ApplyRotation(
+                firstFighter.transform,
+                firstNeutralPose.rotation
+            );
+            ApplyRotation(
+                secondFighter.transform,
+                secondNeutralPose.rotation
+            );
+        }
+
         Publish(
             CombatSpatialChangeReason.DodgeInterrupted,
             fighter,
