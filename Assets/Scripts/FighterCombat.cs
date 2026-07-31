@@ -1262,6 +1262,14 @@ public class FighterCombat : MonoBehaviour
         if (spatialController != null &&
             spatialController.IsFacingPivot(this, direction))
         {
+            if (!fighterStats.SpendStamina(dodgeStaminaCost))
+            {
+                return Refuse(
+                    CombatActionResult.NotEnoughStamina,
+                    CombatRefusalReason.NotEnoughStamina
+                );
+            }
+
             StopSpatialMovement();
             ClearRiposteWindow();
             return spatialController.TryApplyFacingPivot(

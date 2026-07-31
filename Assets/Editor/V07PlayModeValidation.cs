@@ -836,10 +836,9 @@ public static class V07PlayModeValidation
             0f,
             "Pivot enemy displacement"
         );
-        RequireNear(
-            enemyStats.CurrentStamina,
-            enemyStaminaBeforePivot,
-            "Pivot stamina cost"
+        Require(
+            enemyStats.CurrentStamina < enemyStaminaBeforePivot,
+            "The pivot did not spend the standard dodge stamina."
         );
         Require(
             !enemy.FrameRunner.IsDodging &&

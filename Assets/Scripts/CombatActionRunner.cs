@@ -692,16 +692,7 @@ public sealed class CombatActionRunner
     private CombatActionResult ValidateImmediateCostAndSpace(
         CombatFrameCommand command)
     {
-        bool isFacingPivot =
-            IsDodge(command.ActionId) &&
-            spatial != null &&
-            spatial.IsFacingPivot(
-                owner,
-                ToDodgeDirection(command.ActionId)
-            );
-        float cost = isFacingPivot
-            ? 0f
-            : ResolveStaminaCost(command.ActionId);
+        float cost = ResolveStaminaCost(command.ActionId);
         if (stats == null ||
             stats.CurrentStamina + Mathf.Epsilon < cost)
         {
@@ -773,7 +764,7 @@ public sealed class CombatActionRunner
             if (spatial != null &&
                 spatial.IsFacingPivot(owner, direction))
             {
-                StartFacingPivot(direction);
+                StartFacingPivot(command, direction);
                 return;
             }
 
@@ -821,8 +812,20 @@ public sealed class CombatActionRunner
         ApplyStateToOwner();
     }
 
-    private void StartFacingPivot(DodgeDirection direction)
+    private void StartFacingPivot(
+        CombatFrameCommand command,
+        DodgeDirection direction)
     {
+        CombatActionDefinition definition =
+            GetDefinition(command.ActionId);
+        ResolvedCombatAction resolved =
+            ResolveSnapshot(definition);
+        if (!stats.SpendStamina(resolved.StaminaCost))
+        {
+            SetOutcome(CombatFrameOutcome.Rejected);
+            return;
+        }
+
         owner?.StopSpatialMovement();
         if (spatial == null ||
             !spatial.TryApplyFacingPivot(owner, direction))
